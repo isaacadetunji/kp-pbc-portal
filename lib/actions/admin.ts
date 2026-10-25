@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { actionUser } from "@/lib/auth";
+import { actionPermission } from "@/lib/auth";
 import { publicEnv } from "@/lib/env";
 import { syncClientsFromDirectory, type SyncResult } from "@/lib/integrations/client-directory/sync";
 import { getClientDirectory } from "@/lib/integrations/client-directory";
@@ -10,8 +10,14 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { friendlyError } from "@/lib/utils";
 import type { ActionResult } from "./result";
 
-async function requireAdminAction() {
-  return actionUser(["admin", "super_admin"]);
+/** Users & access (Settings > Access: manage_users). */
+async function requireUsersAction() {
+  return actionPermission("manage_users");
+}
+
+/** Clients, groups and client contacts (Settings > Access: manage_clients). */
+async function requireClientsAction() {
+  return actionPermission("manage_clients");
 }
 
 const ADMIN_ROLES = ["admin", "super_admin"];
@@ -25,7 +31,7 @@ const inviteStaffSchema = z.object({
 
 export async function inviteStaffUser(input: z.infer<typeof inviteStaffSchema>): Promise<ActionResult<{ userId: string }>> {
   try {
-    const { profile: me } = await requireAdminAction();
+    const { profile: me } = await requireUsersAction();
     const v = inviteStaffSchema.parse(input);
     if (ADMIN_ROLES.includes(v.role) && me.app_role !== "super_admin") {
       return { ok: false, error: "Only the Super Admin can add administrators." };
@@ -65,7 +71,7 @@ const updateUserSchema = z.object({
 
 export async function updateUser(input: z.infer<typeof updateUserSchema>): Promise<ActionResult> {
   try {
-    const { profile: me } = await requireAdminAction();
+    const { profile: me } = await requireUsersAction();
     const v = updateUserSchema.parse(input);
     if (v.userId === me.id && ((v.role && v.role !== me.app_role) || v.isActive === false)) {
       return { ok: false, error: "You cannot change your own role or deactivate yourself." };
@@ -109,7 +115,7 @@ export async function updateUser(input: z.infer<typeof updateUserSchema>): Promi
 
 export async function syncClients(): Promise<ActionResult<SyncResult>> {
   try {
-    await requireAdminAction();
+    await requireClientsAction();
     const result = await syncClientsFromDirectory();
     revalidatePath("/admin/clients");
     return { ok: true, data: result };
@@ -120,7 +126,7 @@ export async function syncClients(): Promise<ActionResult<SyncResult>> {
 
 export async function checkClientDirectory(): Promise<ActionResult<{ mode: string; ok: boolean; message: string }>> {
   try {
-    await requireAdminAction();
+    await requireClientsAction();
     const d = getClientDirectory();
     const h = await d.healthCheck();
     return { ok: true, data: { mode: d.mode, ...h } };
@@ -145,7 +151,7 @@ const manualClientSchema = z.object({
 /** Manual clients are flagged (source = manual) until they exist in the client database. */
 export async function createManualClient(input: z.infer<typeof manualClientSchema>): Promise<ActionResult<{ id: string }>> {
   try {
-    await requireAdminAction();
+    await requireClientsAction();
     const v = manualClientSchema.parse(input);
     const { data, error } = await createAdminClient()
       .from("clients")
@@ -174,7 +180,7 @@ export async function createManualClient(input: z.infer<typeof manualClientSchem
 
 export async function setClientActive(clientId: string, isActive: boolean): Promise<ActionResult> {
   try {
-    await requireAdminAction();
+    await requireClientsAction();
     const { error } = await createAdminClient().from("clients").update({ is_active: isActive }).eq("id", clientId);
     if (error) return { ok: false, error: friendlyError(error) };
     revalidatePath("/admin/clients");
@@ -189,7 +195,7 @@ export async function setClientActive(clientId: string, isActive: boolean): Prom
 // ---------------------------------------------------------------------------
 export async function createClientGroup(name: string): Promise<ActionResult<{ id: string }>> {
   try {
-    await requireAdminAction();
+    await requireClientsAction();
     const n = z.string().trim().min(2).max(200).parse(name);
     const { data, error } = await createAdminClient().from("client_groups").insert({ name: n }).select("id").single();
     if (error || !data) return { ok: false, error: /duplicate/i.test(error?.message ?? "") ? "A group with that name exists" : friendlyError(error) };
@@ -202,7 +208,7 @@ export async function createClientGroup(name: string): Promise<ActionResult<{ id
 
 export async function setClientGroup(clientId: string, groupId: string | null): Promise<ActionResult> {
   try {
-    await requireAdminAction();
+    await requireClientsAction();
     const { error } = await createAdminClient().from("clients").update({ group_id: groupId }).eq("id", clientId);
     if (error) return { ok: false, error: friendlyError(error) };
     revalidatePath("/admin/clients");
@@ -224,7 +230,7 @@ const contactSchema = z.object({
  *  Engagement access is still granted per engagement by the engagement team. */
 export async function addClientContact(input: z.infer<typeof contactSchema>): Promise<ActionResult<{ added: number }>> {
   try {
-    await requireAdminAction();
+    await requireClientsAction();
     const v = contactSchema.parse(input);
     const admin = createAdminClient();
     const { data: staff } = await admin.from("profiles").select("app_role").eq("email", v.email).maybeSingle();

@@ -1,11 +1,12 @@
 import type { AppRole, EngagementStatus, EventKind, ItemPriority, ItemStatus, SampleLineStatus, TeamRole } from "./types";
 
-type BadgeVariant = "default" | "secondary" | "outline" | "success" | "warning" | "danger" | "info" | "muted";
+/** Badge tones (components/ui/badge.tsx). One meaning per tone across the app. */
+export type BadgeVariant = "default" | "secondary" | "outline" | "success" | "warning" | "danger" | "info" | "review" | "brand" | "muted";
 
 export const ITEM_STATUS: Record<ItemStatus, { label: string; clientLabel: string; variant: BadgeVariant }> = {
   requested: { label: "Requested", clientLabel: "To provide", variant: "muted" },
   submitted: { label: "Submitted", clientLabel: "Submitted", variant: "info" },
-  under_review: { label: "Under review", clientLabel: "Under review", variant: "info" },
+  under_review: { label: "Under review", clientLabel: "Under review", variant: "review" },
   accepted: { label: "Accepted", clientLabel: "Complete", variant: "success" },
   queried: { label: "Queried", clientLabel: "Action needed", variant: "warning" },
   not_applicable: { label: "N/A", clientLabel: "Not required", variant: "outline" },
@@ -15,33 +16,44 @@ export const ITEM_STATUS_ORDER: ItemStatus[] = [
   "requested", "queried", "submitted", "under_review", "accepted", "not_applicable",
 ];
 
+/**
+ * Status pill styling and stepper position. Labels are the DEFAULT stage names;
+ * the displayed names come from app_settings 'stage_labels' (lib/stages.ts,
+ * <StageLabelsProvider>). acceptance_review / accepted / declined are legacy
+ * values shown as Pre-execution.
+ */
 export const ENGAGEMENT_STATUS: Record<EngagementStatus, { label: string; variant: BadgeVariant; step: number }> = {
   draft: { label: "Draft", variant: "muted", step: 0 },
-  awaiting_approval: { label: "Awaiting approval", variant: "info", step: 1 },
-  pre_engagement: { label: "Pre-engagement", variant: "warning", step: 2 },
-  acceptance_review: { label: "Acceptance review", variant: "info", step: 3 },
-  accepted: { label: "Accepted", variant: "success", step: 4 },
-  declined: { label: "Declined", variant: "danger", step: 4 },
-  in_progress: { label: "In progress", variant: "default", step: 5 },
-  completed: { label: "Completed", variant: "success", step: 6 },
-  archived: { label: "Archived", variant: "outline", step: 7 },
+  awaiting_approval: { label: "Approval", variant: "review", step: 1 },
+  pre_engagement: { label: "Pre-execution", variant: "warning", step: 2 },
+  acceptance_review: { label: "Pre-execution", variant: "warning", step: 2 },
+  accepted: { label: "Pre-execution", variant: "warning", step: 2 },
+  declined: { label: "Pre-execution", variant: "warning", step: 2 },
+  in_progress: { label: "Execution", variant: "brand", step: 3 },
+  completed: { label: "Completed", variant: "success", step: 4 },
+  archived: { label: "Archived", variant: "muted", step: 5 },
 };
 
 export const PRIORITY: Record<ItemPriority, { label: string; variant: BadgeVariant }> = {
   low: { label: "Low", variant: "muted" },
   normal: { label: "Normal", variant: "outline" },
-  high: { label: "High", variant: "warning" },
+  important: { label: "Important", variant: "warning" },
   urgent: { label: "Urgent", variant: "danger" },
 };
 
 export const TEAM_ROLE: Record<TeamRole, string> = {
-  lead: "Engagement lead",
+  partner: "Engagement partner",
+  lead: "Team lead",
   manager: "Manager",
-  member: "Member",
+  member: "Team member",
 };
+export const TEAM_ROLE_ORDER: TeamRole[] = ["partner", "lead", "manager", "member"];
+
+export const PRIORITY_ORDER: ItemPriority[] = ["low", "normal", "important", "urgent"];
 
 /** Clients see unreleased engagements (draft / awaiting approval) as this. */
-export const BEING_PREPARED = "Being prepared";
+export const REQUEST_IN_PROGRESS = "Request in progress";
+export const REQUEST_IN_PROGRESS_MESSAGE = "Your engagement team is preparing the request list. You'll be notified when it is released.";
 
 export const EVENT_KIND: Record<EventKind, { label: string; dot: string; chip: string }> = {
   deadline: { label: "Deadline", dot: "bg-destructive", chip: "bg-danger-soft text-destructive" },

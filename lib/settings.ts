@@ -1,6 +1,9 @@
 import "server-only";
 import { cache } from "react";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { notFound } from "next/navigation";
+import { requireStaff } from "@/lib/auth";
+import { normaliseNotificationSettings } from "@/lib/checklist-constants";
 import { DEFAULT_ALLOWED_EXTENSIONS } from "@/lib/constants";
 
 export interface BrandSettings {
@@ -46,3 +49,17 @@ export const getUploadSettings = cache(async () => {
     allowedExtensions: (map["uploads.allowed_extensions"] as string[] | undefined) ?? DEFAULT_ALLOWED_EXTENSIONS,
   };
 });
+
+/** Guard for Settings pages (Super admin only). Layouts are not re-run on
+ *  every navigation, so each settings page calls this too. */
+export async function requireSettingsAccess() {
+  const s = await requireStaff();
+  if (s.profile.app_role !== "super_admin") notFound();
+  return s;
+}
+
+/** Firm-wide notification defaults (Settings > Notifications). */
+export async function getNotificationDefaults() {
+  const { data } = await createAdminClient().from("app_settings").select("value").eq("key", "notifications.defaults").maybeSingle();
+  return normaliseNotificationSettings((data?.value as Record<string, unknown> | null) ?? null);
+}

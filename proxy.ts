@@ -8,7 +8,8 @@ import { NextResponse, type NextRequest } from "next/server";
  *  3. sends signed-out users to /login
  * Role-based routing (staff vs client) happens in the route-group layouts.
  */
-const PUBLIC_PATHS = ["/login", "/auth", "/forgot-password"];
+// /api/cron authenticates with CRON_SECRET (no user session)
+const PUBLIC_PATHS = ["/login", "/auth", "/forgot-password", "/api/cron"];
 const ACTIVITY_COOKIE = "kp_last_activity";
 
 export async function proxy(request: NextRequest) {

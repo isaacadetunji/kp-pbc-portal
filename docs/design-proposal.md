@@ -154,7 +154,7 @@ Written by database triggers on the key tables, so nothing bypasses it.
 
 ## 4. Security model (RLS summary)
 
-Helper functions (`security definer`, stable): `is_admin()`, `is_staff()`, `is_engagement_member(eid)`, `can_accept(eid)`, `is_engagement_client(eid)`.
+Helper functions (`security definer`, stable): `is_admin()`, `is_staff()`, `is_engagement_member(eid)`, `can_accept(eid)`, `is_engagement_client(eid)`. (Superseded in part by migration 0008: see the addendum below. Engagement visibility is permission-based via `view_all_engagements` — on by default for Super admins and Admins, off for Staff; locked requests are filtered by `can_view_request_item()`.)
 
 | Table | Admin | Staff (on team) | Client (granted contact) |
 |---|---|---|---|
@@ -217,3 +217,42 @@ Files are never exposed by storage URL. The download route checks access in the 
 | `engagement_events` | `title, kind event_kind('deadline','filing','meeting','milestone','client_request','other'), starts_on, ends_on (≥ starts_on), notes, visible_to_client, created_by (set by trigger)`. Team members insert/update/delete; clients read `visible_to_client` events of engagements they have access to, also before release. Audit trigger and realtime. |
 | Sample schedules | `sample_schedules.columns` check raised to 1–50. `create_sample_schedule()` rejects more than 50 columns (the UI keeps the first 50 and warns); `add_sample_lines()` already pads/trims cells to the schedule's columns. |
 | Attachments ZIP | `/api/engagements/[id]/attachments?side=client|firm[&ids=…]` reads the permitted rows with the user's session (RLS), refuses over 500 MB (413), then streams a ZIP (fflate, stored entries, with backpressure) built from objects fetched with the service role: `{Folder}/{Code} {Title}/v{n} {file}`, `…/Samples/L{n} {file}`, `Additional documents/{file}`, `manifest.csv`. |
+
+## Addendum: access, team roles, assignment & stages (migration `20261024000008_access_assignment_stages.sql`)
+
+| Change | Detail |
+|---|---|
+| `team_role` | `+ partner` (labels: Engagement partner, Team lead, Manager, Team member). Partial unique index: one `lead` per engagement; a trigger keeps `engagements.lead_id` in sync; `set_engagement_lead(engagement, user)` (Super admin, partner, lead or manager) demotes the previous lead to manager. Team rows must be active firm users; partner rows are changed only by a partner, the lead or a Super admin |
+| Visibility helpers | Per-user (service role): `user_can_view_engagement_firm`, `user_is_engagement_client`, `user_has_app_permission`, `can_user_view_request_item(p_user, p_item)`. Current user: `is_engagement_member` (team, creator, `view_all_engagements`, Super admin), `is_engagement_team` (works on it), `can_manage_engagement` (partner/lead/manager), `is_engagement_lead` (partner/lead), `can_view_request_item(p_item)` |
+| Policies | `is_admin()` replaced: engagement types, settings, e-mail templates, reminder rules and the audit log → `is_super_admin()`; master checklist → `manage_checklist`; client contacts → `manage_clients` or a manager of an engagement of that client |
+| `create_engagement` | Same signature; needs `create_engagements`; `p_lead_id` required; `p_team` roles `partner / manager / member`; the caller is not added |
+| Codes | `app_settings.engagement_code_format` (default `{PREFIX}-{YYYY}-{SEQ4}`; tokens `{PREFIX} {YYYY} {YY} {SEQ} {SEQ3..6}`), validated by `valid_engagement_code_format()`; counters keyed by (prefix, year), year 0 / prefix `*` when the format lacks them |
+| `request_item_assignees` | `(request_item_id, user_id)` PK, `engagement_id`, `side firm/client` (from the user's role), `assigned_by`, `assigned_at`. `request_items.assignee_id` migrated and dropped. Writes only via `set_request_item_assignees(item, side, users[])` and `add_request_item(..., p_is_locked, p_firm_assignee_ids, p_client_assignee_ids)` |
+| Locking | `request_items.is_locked`, `created_by`; `set_request_item_lock(item, bool)`. Locked: clients only if a client assignee; firm: firm assignees, partners, lead, managers, the creator, Super admin |
+| Stages | Main flow `draft → awaiting_approval → pre_engagement → in_progress → completed` (+ `archived`); `acceptance_review / accepted / declined` kept but shown as Pre-execution. `transition_engagement` enforces the critical gate (all critical items, locked included) and the completion rule (open items: partner/lead with a reason, written to the status history and audit log). `app_settings.stage_labels` + `stage_label(status)` |
+
+## Addendum: checklist taxonomy & notifications (migration `20261024000009_checklist_notifications.sql`)
+
+| Change | Detail |
+|---|---|
+| `item_priority` | `'high'` renamed `'important'`: `low, normal, important, urgent`. Function bodies casting `'high'` are rewritten by the migration |
+| `file_class` enum | `permanent`, `current`; nullable `file_class` on `master_checklist_items` and `request_items`. A `BEFORE INSERT` trigger on `request_items` copies it from the master item; pulling master changes refreshes it. Part of the master revision |
+| `expected_file_types` | Kept (deprecated), no longer edited or shown in the master checklist. Uploads were and are validated against the firm-wide allowed types/size only |
+| `master_folders` | `id, name (unique, case-insensitive), sort_order, is_active`. Saving a master item with a new folder name adds it. `rename_master_folder()` renames and updates master items without new revisions |
+| Checklist permissions | Inserts/updates on `master_categories`, `master_folders`, `master_checklist_items`, `master_item_engagement_types` require `has_app_permission('manage_checklist')`. Category `code` is not updatable |
+| `app_settings` writes | Super admin only (`is_super_admin()`). New key `notifications.defaults` |
+| `engagement_notification_settings` | One row per engagement (created from the defaults by trigger): `client_instant, client_reminder_frequency (off/daily/weekdays/weekly), client_reminder_weekday (ISO 1–7), client_reminder_time, client_only_when_outstanding, team_instant, team_reminder_frequency, team_reminder_weekday, team_reminder_time`. Read: team members; write: `can_manage_engagement()`. Clients have no access |
+| `notifications` | `+ email_error, email_attempts, email_skipped` (with `emailed_at` from 0001). Rows existing at migration time are marked as not to be e-mailed |
+| `reminder_log` | `(engagement_id, user_id, audience, local_date)` unique, `status sent/failed/skipped`: makes reminders idempotent per Lagos day |
+| Service-role functions | `email_dispatch_queue()`, `mark_notifications_emailed()`, `reminder_digests_due(now)`, `record_reminder()`, `reminder_is_due()`. Visibility of every item goes through `can_user_view_request_item(user, item)` (0008), so locked items never leak into e-mails |
+
+## Addendum: refinements
+
+| Change | Detail |
+|---|---|
+| Admin default visibility | `default_role_permissions()` (migration 0007) sets Admin `view_all_engagements = true` (Staff stays `false`). Super admins and Admins see every engagement by default; a Super admin can switch it off per role in **Settings > Access**. The mirror `DEFAULT_ROLE_PERMISSIONS` in `lib/permissions.ts` matches |
+| Default folders | `supabase/seed.sql` seeds both `01 Permanent File` and `Current File` among the managed `master_folders`, plus the section folders `15 Journals … 18 IT Environment`. Folders stay user-managed |
+| Standard sections | Seed adds the categories/items **Tests of journals** (`JNL`), **Accounting estimates** (`EST`), **Going concern assessment** (`GCA`) and **IT environment** (`ITE`), upserted by code so existing databases update on re-seed |
+| Progress colours | `lib/progress.ts`: red < 30%, blue 30–69% (info tone `--info-bar`), green ≥ 70%. One rule for every bar/figure (dashboards, folder bars, group summary, lists) and the `<ProgressLegend>` |
+| Client wording | `Request in progress` (was "being prepared"), portal tab `Outstanding` (was "To do"), critical client badge `Critical` (was "Needed first") |
+| Notification scheduler | `/api/cron/dispatch` is called by the Netlify scheduled function, GitHub Actions, **or** `scripts/dispatch-cron.sh` (plain server cron / MochaHost VPS, exits non-zero on failure) |

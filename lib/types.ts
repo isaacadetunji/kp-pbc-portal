@@ -1,11 +1,12 @@
 // Domain types mirroring the Postgres schema (supabase/migrations).
 export type AppRole = "super_admin" | "admin" | "staff" | "client";
-export type TeamRole = "lead" | "manager" | "member";
+export type TeamRole = "partner" | "lead" | "manager" | "member";
 export type EngagementStatus =
   | "draft" | "awaiting_approval" | "pre_engagement" | "acceptance_review" | "accepted" | "declined"
   | "in_progress" | "completed" | "archived";
 export type ItemStatus = "requested" | "submitted" | "under_review" | "accepted" | "queried" | "not_applicable";
-export type ItemPriority = "low" | "normal" | "high" | "urgent";
+/** 0009 renamed the database value "high" to "important". */
+export type ItemPriority = "low" | "normal" | "important" | "urgent";
 export type ReviewAction = "start_review" | "accept" | "query" | "not_applicable" | "reopen";
 
 export interface Profile {
@@ -93,6 +94,7 @@ export interface MasterItem {
 
 export interface Engagement {
   id: string;
+  created_by: string | null;
   code: string;
   client_id: string;
   engagement_type_id: string;
@@ -139,7 +141,6 @@ export interface RequestItem {
   is_critical: boolean;
   priority: ItemPriority;
   status: ItemStatus;
-  assignee_id: string | null;
   due_date: string | null;
   current_version: number;
   sort_order: number;
@@ -150,6 +151,22 @@ export interface RequestItem {
   last_submitted_at: string | null;
   accepted_at: string | null;
   updated_at: string;
+  /** Locked: only assignees (plus partners, the lead, managers and the creator) can see it. */
+  is_locked: boolean;
+  /** Who added the item individually (null for items from the master checklist). */
+  created_by: string | null;
+  /** Permanent / current file (column added by 0009). */
+  file_class?: "permanent" | "current" | null;
+}
+
+export type AssigneeSide = "firm" | "client";
+
+export interface ItemAssignee {
+  request_item_id: string;
+  user_id: string;
+  side: AssigneeSide;
+  assigned_by: string | null;
+  assigned_at: string;
 }
 
 export interface ItemFile {
@@ -316,3 +333,39 @@ export interface Person {
   phone?: string | null;
   job_title?: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// 0009: checklist taxonomy, file classes, notification settings (Agent B)
+// ---------------------------------------------------------------------------
+export type FileClass = "permanent" | "current";
+
+export interface MasterFolder {
+  id: string;
+  name: string;
+  sort_order: number;
+  is_active: boolean;
+}
+
+export type ReminderFrequency = "off" | "daily" | "weekdays" | "weekly";
+
+/** Per-engagement notification settings; times are Africa/Lagos, weekdays ISO (1 = Monday). */
+export interface NotificationSettings {
+  client_instant: boolean;
+  client_reminder_frequency: ReminderFrequency;
+  client_reminder_weekday: number;
+  client_reminder_time: string;
+  client_only_when_outstanding: boolean;
+  team_instant: boolean;
+  team_reminder_frequency: ReminderFrequency;
+  team_reminder_weekday: number;
+  team_reminder_time: string;
+}
+
+export interface EngagementNotificationSettings extends NotificationSettings {
+  engagement_id: string;
+  updated_by: string | null;
+  updated_at: string;
+}
+
+/** Master items as read with the 0009 columns. */
+export type MasterItemWithClass = MasterItem & { file_class: FileClass | null };

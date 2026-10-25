@@ -29,7 +29,7 @@ export async function inviteClientContact(
     const { supabase } = await actionUser(["super_admin", "admin", "staff"]);
 
     const { data: canManage } = await supabase.rpc("can_manage_engagement", { p_engagement_id: parsed.engagementId });
-    if (!canManage) return { ok: false, error: "Only the engagement lead or a manager can invite client users." };
+    if (!canManage) return { ok: false, error: "Only a partner, the team lead or a manager can invite client users." };
 
     const { data: eng } = await supabase
       .from("engagements")

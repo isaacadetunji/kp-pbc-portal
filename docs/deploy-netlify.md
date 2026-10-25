@@ -13,7 +13,7 @@ Use this for a quick assessment environment. Production guidance remains in the 
    (Alternatively paste each file in supabase/migrations, in order, then seed.sql, into the SQL editor.)
 3. Authentication > Providers > Email: turn OFF "Allow new users to sign up" (invite only).
 4. Authentication > URL configuration: Site URL = your Netlify URL; add `https://YOUR-SITE.netlify.app/**` to Redirect URLs.
-5. Authentication > Email templates: paste supabase/templates/invite.html, magic_link.html, recovery.html.
+5. Email templates are OPTIONAL. The portal works with Supabase's default emails. New free-tier projects can only edit templates after a custom SMTP server is set up (Authentication > Emails > SMTP Settings); once it is, you may paste supabase/templates/invite.html, magic_link.html and recovery.html for branded emails.
 6. Project Settings > API: copy the URL, anon key and service_role key.
 
 Emails: the free built-in mailer only sends a few emails per hour. For testing with real colleagues, set Authentication > SMTP to a firm mailbox.

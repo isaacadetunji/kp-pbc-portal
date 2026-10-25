@@ -6,7 +6,8 @@
  * Creates (password for all: DemoPass#2026 unless DEMO_PASSWORD is set):
  *   super@demo.kp.test     Super Admin
  *   admin@demo.kp.test     Admin
- *   lead@demo.kp.test      Engagement lead (staff)
+ *   partner@demo.kp.test   Engagement partner (staff)
+ *   lead@demo.kp.test      Team lead (staff)
  *   manager@demo.kp.test   Manager (staff)
  *   senior@demo.kp.test    Team member (staff)
  *   cfo@demo.client.test   Client user (Adebayo Foods Plc)
@@ -14,8 +15,10 @@
  *
  * Engagements: Adebayo Foods FY(last year) statutory audit (released, with
  * activity, calendar events and additional documents from both sides), a
- * FY(this year) DRAFT that the client users see as "Being prepared", plus two
- * group entities (one awaiting approval, one released).
+ * FY(this year) DRAFT that the client users see as "Request in progress", plus two
+ * group entities (one awaiting approval, one released). Requests are assigned
+ * to firm and client people; one confidential request is locked (only its
+ * assignees, the partner, the lead and managers see it).
  *
  * Safe to re-run: existing users are reused; the demo engagements are only
  * created if the client has no engagement yet.
@@ -35,7 +38,8 @@ const admin = createClient(url, serviceKey, { auth: { persistSession: false, aut
 const USERS = [
   { email: "super@demo.kp.test", name: "Funmi Akinola", role: "super_admin", title: "IT & Risk Partner" },
   { email: "admin@demo.kp.test", name: "Adaeze Admin", role: "admin", title: "Portal Administrator" },
-  { email: "lead@demo.kp.test", name: "Olumide Adeyemi", role: "staff", title: "Audit Partner" },
+  { email: "partner@demo.kp.test", name: "Kemi Adebayo-Lawal", role: "staff", title: "Engagement Partner" },
+  { email: "lead@demo.kp.test", name: "Olumide Adeyemi", role: "staff", title: "Audit Senior Manager" },
   { email: "manager@demo.kp.test", name: "Ngozi Eze", role: "staff", title: "Audit Manager" },
   { email: "senior@demo.kp.test", name: "Bayo Ogunleye", role: "staff", title: "Audit Senior" },
   { email: "cfo@demo.client.test", name: "Chioma Okafor", role: "client", title: "Chief Financial Officer" },
@@ -195,6 +199,7 @@ async function main() {
       p_master_item_ids: (master ?? []).map((m) => m.master_item_id),
       p_default_due_date: addDays(21),
       p_team: [
+        { user_id: ids["partner@demo.kp.test"], team_role: "partner" },
         { user_id: ids["manager@demo.kp.test"], team_role: "manager" },
         { user_id: ids["senior@demo.kp.test"], team_role: "member" },
       ],
@@ -209,14 +214,37 @@ async function main() {
   const { data: items } = await lead.from("request_items").select("id, code, is_critical").eq("engagement_id", engId);
   const byCode = new Map((items ?? []).map((i) => [i.code, i]));
   const crit = (items ?? []).filter((i) => i.is_critical).map((i) => i.id);
-  must(await lead.from("request_items").update({ due_date: addDays(7), assignee_id: ids["manager@demo.kp.test"] }).in("id", crit), "critical due");
+  must(await lead.from("request_items").update({ due_date: addDays(7) }).in("id", crit), "critical due");
   const other = (items ?? []).filter((i) => !i.is_critical).map((i) => i.id);
-  must(await lead.from("request_items").update({ assignee_id: ids["senior@demo.kp.test"] }).in("id", other), "assign");
+  const assign = (itemId: string, side: "firm" | "client", users: string[]) =>
+    lead.rpc("set_request_item_assignees", { p_item_id: itemId, p_side: side, p_user_ids: users });
+  for (const r of await Promise.all(crit.map((id) => assign(id, "firm", [ids["manager@demo.kp.test"]!])))) must(r, "assign critical");
+  for (const r of await Promise.all(other.map((id) => assign(id, "firm", [ids["senior@demo.kp.test"]!])))) must(r, "assign");
   must(await lead.from("request_items").update({ due_date: addDays(-3) }).in("code", ["CSH-01", "CSH-02", "FST-01"]), "overdue");
 
-  // Client access, then issue
+  // Client access, client-side assignees, a locked confidential request, then issue
   const { data: contacts } = await admin.from("client_contacts").select("id").eq("client_id", client.id);
   for (const c of contacts ?? []) await grantAccess(lead, engId, c.id);
+  for (const code of ["CSH-01", "CSH-02", "FST-01"]) {
+    const it = byCode.get(code);
+    if (it) must(await assign(it.id, "client", [ids["fc@demo.client.test"]!]), "assign client");
+  }
+  const { data: hrFolder } = await lead.from("engagement_folders").select("id").eq("engagement_id", engId).order("sort_order").limit(1).single();
+  if (hrFolder) {
+    must(
+      await lead.rpc("add_request_item", {
+        p_engagement_id: engId,
+        p_folder_id: hrFolder.id,
+        p_title: "Directors' remuneration and benefits schedule",
+        p_guidance: "Confidential: schedule of each director's emoluments, benefits in kind and bonuses for the year, agreed to payroll.",
+        p_due_date: addDays(14),
+        p_is_locked: true,
+        p_firm_assignee_ids: [ids["manager@demo.kp.test"]],
+        p_client_assignee_ids: [ids["cfo@demo.client.test"]],
+      }),
+      "locked request",
+    );
+  }
   must(await lead.rpc("issue_request_list", { p_engagement_id: engId }), "issue");
   console.log("✓ engagement issued");
 
@@ -316,7 +344,7 @@ async function main() {
   console.log("✓ calendar and additional documents");
 
   // Next year's audit: created as a DRAFT. The client users are granted by
-  // default and see it as "Being prepared" (team + key dates, no requests).
+  // default and see it as "Request in progress" (team + key dates, no requests).
   const next = year + 1;
   const eng4 = must(await lead.rpc("create_engagement", {
     p_client_id: client.id, p_engagement_type_id: sa!.id, p_name: `Statutory audit — FY${next}`,
@@ -337,7 +365,7 @@ async function main() {
     ])),
     "events FY next",
   );
-  console.log(`✓ FY${next} draft engagement (client sees "Being prepared")`);
+  console.log(`✓ FY${next} draft engagement (client sees "Request in progress")`);
 
   // Second entity: list prepared by the senior and waiting for approval
   const { data: tx } = await admin.from("engagement_types").select("id").eq("code", "TX").single();

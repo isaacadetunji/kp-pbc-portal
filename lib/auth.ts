@@ -2,6 +2,8 @@ import "server-only";
 import { cache } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { normaliseRolePermissions, permissionsFor, type AppPermission, type Permissions } from "@/lib/permissions";
+import { normaliseStageLabels, type StageLabels } from "@/lib/stages";
 import type { Profile } from "@/lib/types";
 
 /** Current user + profile for this request (memoised per request). */
@@ -48,11 +50,60 @@ export async function requireStaff() {
   return s;
 }
 
+/** @deprecated Admin areas are permission based now: use requirePermission() or requireSuperAdmin(). */
 export async function requireAdmin() {
   const s = await requireStaff();
   if (s.profile.app_role !== "admin" && s.profile.app_role !== "super_admin") redirect("/dashboard");
   return s;
 }
+
+/**
+ * The signed-in user's app permissions (Settings > Access matrix; Super admin
+ * has all). Mirrors public.has_app_permission(); the database still enforces
+ * every permission, this only decides what the UI shows.
+ */
+export const getPermissions = cache(async (): Promise<Permissions> => {
+  const { supabase, profile } = await getSession();
+  if (!profile || !profile.is_active) return permissionsFor(null, normaliseRolePermissions(null));
+  if (profile.app_role === "super_admin" || profile.app_role === "client") return permissionsFor(profile.app_role, normaliseRolePermissions(null));
+  const { data } = await supabase.from("app_settings").select("value").eq("key", "role_permissions").maybeSingle();
+  return permissionsFor(profile.app_role, normaliseRolePermissions(data?.value));
+});
+
+/** Page guard: firm user holding the permission (else back to the dashboard). */
+export async function requirePermission(perm: AppPermission) {
+  const s = await requireStaff();
+  const perms = await getPermissions();
+  if (!perms[perm]) redirect("/dashboard");
+  return { ...s, perms };
+}
+
+/** Page guard: Super admin only (Settings). */
+export async function requireSuperAdmin() {
+  const s = await requireStaff();
+  if (s.profile.app_role !== "super_admin") redirect("/dashboard");
+  return s;
+}
+
+/** For server actions: throws unless the user holds the permission. */
+export async function actionPermission(perm: AppPermission) {
+  const s = await actionUser(["super_admin", "admin", "staff"]);
+  const perms = await getPermissions();
+  if (!perms[perm]) throw new Error("You don't have permission to do that.");
+  return { ...s, perms };
+}
+
+/** For server actions: throws unless the user is a Super admin. */
+export async function actionSuperAdmin() {
+  return actionUser(["super_admin"]);
+}
+
+/** Stage display names (Settings > Engagements). Readable by every signed-in user. */
+export const getStageLabels = cache(async (): Promise<StageLabels> => {
+  const { supabase } = await getSession();
+  const { data } = await supabase.from("app_settings").select("value").eq("key", "stage_labels").maybeSingle();
+  return normaliseStageLabels(data?.value);
+});
 
 export async function requireClient() {
   const s = await requireUser();

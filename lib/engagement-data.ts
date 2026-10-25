@@ -1,7 +1,8 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
-  Client, ClientContact, Engagement, EngagementProgress, EngagementStatus, EngagementType, Folder, FolderProgress, Person, RequestItem, TeamRole,
+  Client, ClientContact, Engagement, EngagementProgress, EngagementStatus, EngagementType, Folder, FolderProgress, ItemAssignee, Person,
+  RequestItem, TeamRole,
 } from "@/lib/types";
 
 export interface TeamMember extends Person {
@@ -19,6 +20,8 @@ export interface EngagementBundle {
   folderProgress: FolderProgress[];
   fileCounts: Record<string, number>;
   commentCounts: Record<string, number>;
+  /** Assignees per request item (only items the caller can see). */
+  assignees: Record<string, ItemAssignee[]>;
 }
 
 /** Loads everything an engagement screen needs, with the caller's RLS. */
@@ -27,7 +30,7 @@ export async function loadEngagement(supabase: SupabaseClient, id: string): Prom
   const { data: engagement } = await supabase.from("engagements").select("*").eq("id", id).maybeSingle<Engagement>();
   if (!engagement) return null;
 
-  const [client, type, folders, items, team, progress, folderProgress, files, comments] = await Promise.all([
+  const [client, type, folders, items, team, progress, folderProgress, files, comments, assignees] = await Promise.all([
     supabase.from("clients").select("*").eq("id", engagement.client_id).maybeSingle<Client>(),
     supabase.from("engagement_types").select("*").eq("id", engagement.engagement_type_id).single<EngagementType>(),
     supabase.from("engagement_folders").select("*").eq("engagement_id", id).order("sort_order").order("name"),
@@ -37,6 +40,7 @@ export async function loadEngagement(supabase: SupabaseClient, id: string): Prom
     supabase.from("v_folder_progress").select("*").eq("engagement_id", id),
     supabase.from("request_item_files").select("request_item_id").eq("engagement_id", id).eq("kind", "client_submission").not("submitted_at", "is", null),
     supabase.from("comments").select("request_item_id").eq("engagement_id", id).is("deleted_at", null).is("sample_line_id", null),
+    supabase.from("request_item_assignees").select("request_item_id, user_id, side, assigned_by, assigned_at").eq("engagement_id", id).order("assigned_at"),
   ]);
 
   const count = (rows: { request_item_id: string }[] | null) =>
@@ -45,7 +49,9 @@ export async function loadEngagement(supabase: SupabaseClient, id: string): Prom
       return acc;
     }, {});
 
-  const roleOrder: Record<TeamRole, number> = { lead: 0, manager: 1, member: 2 };
+  const roleOrder: Record<TeamRole, number> = { partner: 0, lead: 1, manager: 2, member: 3 };
+  const byItem: Record<string, ItemAssignee[]> = {};
+  for (const a of (assignees.data as ItemAssignee[] | null) ?? []) (byItem[a.request_item_id] ??= []).push(a);
   const teamRows = (team.data ?? []) as unknown as { team_role: TeamRole; profiles: Person | null }[];
 
   return {
@@ -58,11 +64,12 @@ export async function loadEngagement(supabase: SupabaseClient, id: string): Prom
     team: teamRows
       .filter((t) => t.profiles)
       .map((t) => ({ ...(t.profiles as Person), team_role: t.team_role }))
-      .sort((a, b) => roleOrder[a.team_role] - roleOrder[b.team_role]),
+      .sort((a, b) => roleOrder[a.team_role] - roleOrder[b.team_role] || a.full_name.localeCompare(b.full_name)),
     progress: progress.data ?? null,
     folderProgress: (folderProgress.data as FolderProgress[]) ?? [],
     fileCounts: count(files.data as { request_item_id: string }[] | null),
     commentCounts: count(comments.data as { request_item_id: string }[] | null),
+    assignees: byItem,
   };
 }
 
@@ -72,6 +79,26 @@ export interface ClientAccessRow {
   first_login_at: string | null;
   revoked_at: string | null;
   contact: ClientContact;
+}
+
+/**
+ * Client users who can be assigned on this engagement: contacts with a portal
+ * account and unrevoked access. Readable by the team and by fellow client users.
+ */
+export async function loadClientUsers(supabase: SupabaseClient, engagementId: string): Promise<Person[]> {
+  const { data } = await supabase
+    .from("engagement_client_access")
+    .select("revoked_at, contact:contact_id(user_id, full_name, email, position)")
+    .eq("engagement_id", engagementId)
+    .is("revoked_at", null);
+  const rows = (data ?? []) as unknown as { contact: { user_id: string | null; full_name: string; email: string; position: string | null } | null }[];
+  const seen = new Set<string>();
+  return rows
+    .map((r) => r.contact)
+    .filter((c): c is { user_id: string; full_name: string; email: string; position: string | null } => Boolean(c?.user_id))
+    .filter((c) => (seen.has(c.user_id) ? false : (seen.add(c.user_id), true)))
+    .map((c) => ({ id: c.user_id, full_name: c.full_name, email: c.email, app_role: "client" as const, job_title: c.position }))
+    .sort((a, b) => a.full_name.localeCompare(b.full_name));
 }
 
 /** Released to the client (the request list is visible to them). */
@@ -106,9 +133,10 @@ type NavRow = {
 };
 
 /**
- * Engagements for the vertical workspace list, read with the caller's RLS.
- * scope "mine" limits staff to engagements they are on the team of (admins can
- * read every engagement through RLS, so "mine" is applied explicitly).
+ * Engagements for the vertical list, read with the caller's RLS (which already
+ * limits firm users to engagements they are on, created, or may all see).
+ * scope "mine" narrows to engagements the user is on the team of or created
+ * (relevant for people who may see every engagement).
  */
 export async function loadEngagementNav(
   supabase: SupabaseClient,
@@ -116,8 +144,11 @@ export async function loadEngagementNav(
 ): Promise<NavEngagement[]> {
   let ids: string[] | null = null;
   if (opts.scope === "mine") {
-    const { data } = await supabase.from("engagement_team").select("engagement_id").eq("user_id", opts.userId);
-    ids = (data ?? []).map((r) => r.engagement_id as string);
+    const [{ data }, { data: created }] = await Promise.all([
+      supabase.from("engagement_team").select("engagement_id").eq("user_id", opts.userId),
+      supabase.from("engagements").select("id").eq("created_by", opts.userId),
+    ]);
+    ids = [...new Set([...(data ?? []).map((r) => r.engagement_id as string), ...(created ?? []).map((r) => r.id as string)])];
     if (ids.length === 0) return [];
   }
   let q = supabase
