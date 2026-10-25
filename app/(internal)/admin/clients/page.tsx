@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { PageHeader } from "@/components/page-header";
-import { requireAdmin } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { serverEnv } from "@/lib/env";
 import type { Client, ClientContact, ClientGroup } from "@/lib/types";
 import { ClientsAdmin, type ClientEngagement } from "./clients-admin";
@@ -8,7 +8,7 @@ import { ClientsAdmin, type ClientEngagement } from "./clients-admin";
 export const metadata: Metadata = { title: "Clients" };
 
 export default async function ClientsPage() {
-  const { supabase } = await requireAdmin();
+  const { supabase, perms } = await requirePermission("manage_clients");
   const [{ data: clients }, { data: contacts }, { data: engs }, { data: groups }] = await Promise.all([
     supabase.from("clients").select("*").order("name"),
     supabase.from("client_contacts").select("*").order("full_name"),
@@ -29,6 +29,7 @@ export default async function ClientsPage() {
         engagements={engagements}
         groups={(groups as ClientGroup[]) ?? []}
         mode={serverEnv().clientDirectoryMode}
+        canCreateEngagements={perms.create_engagements}
       />
     </div>
   );

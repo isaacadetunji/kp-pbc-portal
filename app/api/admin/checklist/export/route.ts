@@ -8,6 +8,8 @@ export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: isStaff } = await supabase.rpc("is_staff");
   if (!isStaff) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const { data: canManage } = await supabase.rpc("has_app_permission", { p_perm: "manage_checklist" });
+  if (!canManage) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const [{ data: items }, { data: cats }, { data: types }] = await Promise.all([
     supabase
@@ -26,9 +28,9 @@ export async function GET(request: NextRequest) {
       code: i.code,
       category_code: catById.get(i.category_id)?.code ?? "",
       title: i.title,
-      guidance: i.guidance ?? "",
+      description: i.guidance ?? "",
       default_folder: i.default_folder,
-      expected_file_types: (i.expected_file_types ?? []).join(";"),
+      file_class: i.file_class ?? "",
       is_critical: i.is_critical ? "yes" : "no",
       default_priority: i.default_priority,
       engagement_types: (i.master_item_engagement_types ?? []).map((x: { engagement_type_id: string }) => typeById.get(x.engagement_type_id)).filter(Boolean).join(";"),
@@ -38,7 +40,7 @@ export async function GET(request: NextRequest) {
 
   const stamp = new Date().toISOString().slice(0, 10);
   if (request.nextUrl.searchParams.get("format") === "xlsx") {
-    const buf = await rowsToXlsx(rows);
+    const buf = await rowsToXlsx(rows, (cats ?? []).map((c) => c.code));
     return new Response(buf, {
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

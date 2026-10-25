@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "@fontsource-variable/inter";
+import "@fontsource-variable/plus-jakarta-sans";
 import "./globals.css";
 import { Toaster } from "sonner";
 import { getBrand } from "@/lib/settings";
@@ -16,7 +17,7 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-export const viewport: Viewport = { width: "device-width", initialScale: 1, themeColor: "#189CD8" };
+export const viewport: Viewport = { width: "device-width", initialScale: 1, themeColor: "#0F77AD" };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const brand = await getBrand();

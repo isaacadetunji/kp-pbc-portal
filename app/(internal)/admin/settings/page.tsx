@@ -1,14 +1,12 @@
 import type { Metadata } from "next";
-import { PageHeader } from "@/components/page-header";
-import { requireAdmin } from "@/lib/auth";
 import { serverEnv } from "@/lib/env";
-import { getBrand, getUploadSettings } from "@/lib/settings";
+import { getBrand, getUploadSettings, requireSettingsAccess } from "@/lib/settings";
 import { SettingsForm } from "./settings-form";
 
-export const metadata: Metadata = { title: "Settings" };
+export const metadata: Metadata = { title: "Settings · General" };
 
 export default async function SettingsPage() {
-  const { supabase } = await requireAdmin();
+  const { supabase } = await requireSettingsAccess();
   const [brand, uploads, { data: mfa }] = await Promise.all([
     getBrand(),
     getUploadSettings(),
@@ -16,8 +14,11 @@ export default async function SettingsPage() {
   ]);
   const env = serverEnv();
   return (
-    <div className="space-y-6">
-      <PageHeader title="Settings" description="Branding, upload rules, security and integration status." />
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold">General</h2>
+        <p className="text-sm text-muted-foreground">Branding, upload rules, security and integration status.</p>
+      </div>
       <SettingsForm
         brand={brand}
         uploads={uploads}

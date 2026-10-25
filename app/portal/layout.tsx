@@ -2,13 +2,15 @@ import Link from "next/link";
 import { BrandLogo } from "@/components/brand-logo";
 import { NotificationBell } from "@/components/notification-bell";
 import { UserMenu } from "@/components/user-menu";
-import { requireClient } from "@/lib/auth";
+import { getStageLabels, requireClient } from "@/lib/auth";
+import { StageLabelsProvider } from "@/components/stage-labels";
 import { getBrand } from "@/lib/settings";
 
 export default async function PortalLayout({ children }: { children: React.ReactNode }) {
   const { profile } = await requireClient();
-  const brand = await getBrand();
+  const [brand, labels] = await Promise.all([getBrand(), getStageLabels()]);
   return (
+    <StageLabelsProvider labels={labels}>
     <div className="flex min-h-dvh flex-col">
       <header className="sticky top-0 z-30 border-b bg-card/95 backdrop-blur">
         <div className="h-1 bg-gradient-to-r from-brand-accent to-brand-blue" />
@@ -27,5 +29,6 @@ export default async function PortalLayout({ children }: { children: React.React
         {brand.firm_name} · Secure client portal · Files are stored in the firm&apos;s document system and every action is logged.
       </footer>
     </div>
+    </StageLabelsProvider>
   );
 }

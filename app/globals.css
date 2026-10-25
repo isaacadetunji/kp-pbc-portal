@@ -4,49 +4,82 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * Brand tokens. --brand-primary / --brand-accent are overridden at runtime from
- * the admin "Branding" settings (see app/layout.tsx), so colours are
- * configurable without a rebuild.
+ * Kreston Pedabo PBC Portal design tokens (docs/design-system.md).
+ *
+ * Brand: logo blue #189CD8, logo teal #43BBC7, action blue #0F77AD.
+ * --brand-primary / --brand-accent are overridden at runtime from the admin
+ * "Branding" settings (see app/layout.tsx), so colours are configurable
+ * without a rebuild. Everything else is derived or fixed.
+ *
+ * Neutrals are a cool slate tuned toward the brand hue (~205deg) so greys sit
+ * comfortably next to the blues. Status colours follow one system (soft
+ * background + dark text, each pair >= 4.5:1, WCAG AA); see lib/status-tones.ts.
  */
 :root {
-  /* Kreston Pedabo: logo blue #189CD8, logo teal #43BBC7.
-     --brand-primary is the accessible action shade (4.9:1 on white). */
-  --brand-primary: #0f77ad;
+  /* --- Brand ------------------------------------------------------------ */
+  --brand-primary: #0f77ad; /* action blue, 4.9:1 with white */
   --brand-blue: #189cd8;
   --brand-accent: #43bbc7;
+  --brand-ink: #0a2a40; /* deep brand navy for emphasis surfaces */
 
-  --radius: 0.5rem;
-  --background: #f6f8fb;
-  --foreground: #0f172a;
+  /* --- Neutrals (slate, brand-tinted) ------------------------------------ */
+  --background: #f4f6f9;
+  --foreground: #0b1b2b; /* 17.4:1 on white */
   --card: #ffffff;
-  --card-foreground: #0f172a;
+  --card-foreground: #0b1b2b;
   --popover: #ffffff;
-  --popover-foreground: #0f172a;
+  --popover-foreground: #0b1b2b;
   --primary: var(--brand-primary);
   --primary-foreground: #ffffff;
-  --secondary: #eef2f7;
-  --secondary-foreground: #0f172a;
-  --muted: #eef2f7;
-  --muted-foreground: #5b6474;
-  --accent: #e7f4fb;
-  --accent-foreground: #0f77ad;
-  --destructive: #c62828;
-  --border: #dde3ec;
-  --input: #cfd7e3;
+  --primary-hover: color-mix(in oklab, var(--brand-primary) 86%, #000);
+  --secondary: #eef2f6;
+  --secondary-foreground: #0b1b2b;
+  --muted: #eef2f6;
+  --muted-foreground: #556274; /* 6.2:1 on white, 5.7:1 on background */
+  --subtle-foreground: #6b7787; /* 4.5:1 on white: hints and meta only */
+  --accent: #e8f4fb; /* brand-tinted hover / selected surface */
+  --accent-foreground: #0b6596;
+  --destructive: #c8312a;
+  --border: #e1e6ed;
+  --border-strong: #cdd5df;
+  --input: #cdd5df;
   --ring: var(--brand-blue);
 
-  --success: #1e7d4f;
-  --success-soft: #e3f4ea;
-  --warning: #9a5b00;
-  --warning-soft: #fdf1dc;
-  --danger-soft: #fbe6e6;
-  --info: #1f5fa8;
-  --info-soft: #e5eefa;
+  /* --- Status system (lib/status-tones.ts) ------------------------------- */
+  /* text on soft background: all >= 5.6:1 */
+  --success: #13693f;
+  --success-soft: #e5f4eb;
+  --success-solid: #18804f;
+  --success-bar: #1f9d5c;
+  --warning: #8a4500;
+  --warning-soft: #fdf0d8;
+  --warning-solid: #b45309;
+  --warning-bar: #d08300;
+  --danger: #b3261e;
+  --danger-soft: #fdebe9;
+  --danger-bar: #d9372e;
+  --info: #0b5f8c;
+  --info-soft: #e6f2fa;
+  --info-bar: #1f86c4;
+  --review: #5636a8;
+  --review-soft: #efebfb;
+  --neutral: #475569;
+  --neutral-soft: #eef2f6;
+  /* client-side people (avatars, chips): teal family of the logo accent, 6.4:1 */
+  --client: #0b5d66;
+  --client-soft: #d7f1f4;
+
+  /* --- Shape and elevation ---------------------------------------------- */
+  --radius: 0.5rem; /* 8px: controls md=6, lg=8, cards xl=12 */
+  --shadow-xs: 0 1px 2px rgb(16 24 40 / 0.05);
+  --shadow-sm: 0 1px 2px rgb(16 24 40 / 0.04), 0 1px 3px rgb(16 24 40 / 0.06);
+  --shadow-md: 0 2px 4px -1px rgb(16 24 40 / 0.05), 0 4px 12px -2px rgb(16 24 40 / 0.08);
+  --shadow-lg: 0 8px 16px -4px rgb(16 24 40 / 0.08), 0 16px 40px -8px rgb(16 24 40 / 0.14);
 
   --sidebar: #ffffff;
-  --sidebar-foreground: #0f172a;
-  --sidebar-muted: #5b6474;
-  --sidebar-active: #e7f4fb;
+  --sidebar-foreground: #0b1b2b;
+  --sidebar-muted: #556274;
+  --sidebar-active: #e8f4fb;
 }
 
 @theme inline {
@@ -58,26 +91,43 @@
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
+  --color-subtle-foreground: var(--subtle-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-brand: var(--brand-primary);
   --color-brand-accent: var(--brand-accent);
   --color-brand-blue: var(--brand-blue);
+  --color-brand-ink: var(--brand-ink);
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
+  --color-success-solid: var(--success-solid);
+  --color-success-bar: var(--success-bar);
   --color-warning: var(--warning);
   --color-warning-soft: var(--warning-soft);
+  --color-warning-solid: var(--warning-solid);
+  --color-warning-bar: var(--warning-bar);
+  --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
+  --color-danger-bar: var(--danger-bar);
   --color-info: var(--info);
   --color-info-soft: var(--info-soft);
+  --color-info-bar: var(--info-bar);
+  --color-review: var(--review);
+  --color-review-soft: var(--review-soft);
+  --color-neutral: var(--neutral);
+  --color-neutral-soft: var(--neutral-soft);
+  --color-client: var(--client);
+  --color-client-soft: var(--client-soft);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-muted: var(--sidebar-muted);
@@ -86,18 +136,89 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
-  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --radius-2xl: calc(var(--radius) + 8px);
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+
+  /* Type: Inter for UI and data, Plus Jakarta Sans for headings and figures */
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Plus Jakarta Sans Variable", "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  /* Type scale (Fluent 2 / Carbon productive aligned): 11 / 12 / 13 / 14 / 16 / 18 / 20 / 24 / 30 */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base: 1rem;
+  --text-base--line-height: 1.5rem;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.625rem;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 2rem;
+  --text-3xl: 1.875rem;
+  --text-3xl--line-height: 2.375rem;
+  --text-4xl: 2.25rem;
+  --text-4xl--line-height: 2.75rem;
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
-  body {
-    @apply bg-background text-foreground antialiased;
-    font-feature-settings: "cv11", "ss01";
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
   }
+  body {
+    @apply bg-background text-sm text-foreground antialiased;
+    /* Inter: single-storey a (cv11), open digits (ss01), tailed l so l/I/1 differ (cv05) */
+    font-feature-settings: "cv11", "ss01", "cv05";
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+  }
+  h1 {
+    letter-spacing: -0.022em;
+  }
+  table,
+  time {
+    font-variant-numeric: tabular-nums;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--brand-blue) 22%, transparent);
+  }
+}
+
+@layer utilities {
   .tabular {
     font-variant-numeric: tabular-nums;
+  }
+  /* Small uppercase label ("eyebrow") */
+  .eyebrow {
+    font-size: 0.6875rem;
+    line-height: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+  }
+  /* Subtle brand wash for hero / summary surfaces */
+  .surface-brand {
+    background:
+      radial-gradient(120% 140% at 100% 0%, color-mix(in oklab, var(--brand-accent) 10%, transparent) 0%, transparent 55%),
+      radial-gradient(120% 140% at 0% 100%, color-mix(in oklab, var(--brand-blue) 7%, transparent) 0%, transparent 60%),
+      var(--card);
   }
 }

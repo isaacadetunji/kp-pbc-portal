@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2, Mail } from "lucide-react";
@@ -19,6 +19,13 @@ export function LoginForm({ next, notice }: { next: string; notice?: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
+
+  // A sign-in link that fell back to the site root lands here with the session in the fragment
+  useEffect(() => {
+    if (/(^|[#&])(access_token|error_description)=/.test(window.location.hash)) {
+      window.location.replace(`/auth/complete?next=${encodeURIComponent(next)}${window.location.hash}`);
+    }
+  }, [next]);
 
   async function signInWithPassword(e: React.FormEvent) {
     e.preventDefault();

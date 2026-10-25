@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { CalendarDays, ChevronLeft, Hourglass, Users } from "lucide-react";
+import { ArrowLeft, CalendarDays, Hourglass, Users } from "lucide-react";
 import { AdditionalDocuments } from "@/components/engagement/additional-documents";
 import { ActiveTabScroller } from "@/components/engagement/active-tab-scroller";
+import { tabClass } from "@/lib/tab-class";
 import { AttachmentsPanel } from "@/components/engagement/attachments-panel";
 import { EngagementCalendar } from "@/components/engagement/engagement-calendar";
-import { EngagementWorkspace } from "@/components/engagement/engagement-nav";
 import { ProgressPanel } from "@/components/engagement/progress-panel";
 import { RealtimeRefresh } from "@/components/engagement/realtime-refresh";
 import { TeamAccess } from "@/components/engagement/team-access";
@@ -15,8 +15,9 @@ import { EngagementStatusBadge } from "@/components/status-badge";
 import { Alert } from "@/components/ui/alert";
 import { loadAttachments, publicAttachment } from "@/lib/attachments";
 import { requireClient } from "@/lib/auth";
+import { REQUEST_IN_PROGRESS, REQUEST_IN_PROGRESS_MESSAGE } from "@/lib/constants";
 import { fmtDate } from "@/lib/dates";
-import { engagementMilestones, groupByClient, isReleased, loadEngagement, loadEngagementNav, type ClientAccessRow } from "@/lib/engagement-data";
+import { engagementMilestones, isReleased, loadClientUsers, loadEngagement, type ClientAccessRow } from "@/lib/engagement-data";
 import { getUploadSettings } from "@/lib/settings";
 import type { EngagementDocument, EngagementEvent } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -41,9 +42,9 @@ export default async function PortalEngagementPage({
   const bundle = await loadEngagement(supabase, id);
   if (!bundle) notFound();
   await supabase.rpc("touch_client_access", { p_engagement_id: id });
-  const { engagement, client, type, folders, items, team, progress, folderProgress, fileCounts, commentCounts } = bundle;
+  const { engagement, client, type, folders, items, team, progress, folderProgress, fileCounts, commentCounts, assignees } = bundle;
   const released = isReleased(engagement.status);
-  const [upload, nav] = await Promise.all([getUploadSettings(), loadEngagementNav(supabase, { userId: profile.id, scope: "all" })]);
+  const [upload, clientUsers] = await Promise.all([getUploadSettings(), loadClientUsers(supabase, id)]);
   const maxMb = engagement.max_upload_mb ?? upload.maxFileMb;
   const base = `/portal/${id}`;
 
@@ -61,6 +62,8 @@ export default async function PortalEngagementPage({
         items={items}
         folders={folders}
         team={team}
+        clientUsers={clientUsers}
+        assignees={assignees}
         progress={progress}
         fileCounts={fileCounts}
         commentCounts={commentCounts}
@@ -126,21 +129,28 @@ export default async function PortalEngagementPage({
   }
 
   return (
-    <EngagementWorkspace groups={groupByClient(nav)} activeId={id} hrefBase="/portal" audience="client">
+    <div className="min-w-0 space-y-4">
       <RealtimeRefresh engagementId={id} />
-      <div className="space-y-2">
-        <Link href="/portal" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-          <ChevronLeft className="size-3" /> All engagements
-        </Link>
-        <div className="flex flex-wrap items-center gap-2">
-          <h1 className="text-xl font-semibold sm:text-2xl">{client.name}</h1>
+      <Link href="/portal" className="inline-flex items-center gap-1 rounded text-[13px] font-medium text-muted-foreground hover:text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
+        <ArrowLeft className="size-4" aria-hidden /> All engagements
+      </Link>
+      <div className="surface-brand rounded-xl border p-5 shadow-sm sm:p-6">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span className="rounded-md border bg-card px-1.5 py-px font-mono text-[11px] font-medium text-foreground/80">{engagement.code}</span>
+          <span className="font-medium">{type?.name}</span>
+        </div>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <h1 className="text-[22px] leading-8 font-bold sm:text-[26px]">{client.name}</h1>
           <EngagementStatusBadge status={engagement.status} audience="client" />
         </div>
-        <p className="text-sm text-muted-foreground">
+        <p className="mt-1 text-sm text-muted-foreground">
           {engagement.name} · {type?.name} · {engagement.code} · period to {fmtDate(engagement.period_end)}
         </p>
         {team.length ? (
-          <p className="text-xs text-muted-foreground">Your engagement team: {team.map((t) => t.full_name).join(", ")}</p>
+          <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            <Users className="size-3.5 text-subtle-foreground" aria-hidden />
+            Your engagement team: <span className="font-medium text-foreground/90">{team.map((t) => t.full_name).join(", ")}</span>
+          </p>
         ) : null}
       </div>
 
@@ -148,39 +158,37 @@ export default async function PortalEngagementPage({
         <Alert variant="info">
           <Hourglass />
           <div>
-            <div className="font-medium">Being prepared</div>
+            <div className="font-semibold">{REQUEST_IN_PROGRESS}</div>
             <div className="text-sm">
-              {team.find((t) => t.team_role === "lead")?.full_name ?? "The engagement team"} and the team are preparing the information request for this engagement.
-              You&apos;ll be notified as soon as it&apos;s released. Meanwhile you can see who is on the team and the key dates.
+              {REQUEST_IN_PROGRESS_MESSAGE} Meanwhile you can see who is on the team and the key dates.
             </div>
           </div>
         </Alert>
       ) : null}
 
-      <nav className="flex gap-1 overflow-x-auto border-b" aria-label="Engagement sections">
+      <nav className="relative flex gap-1 overflow-x-auto border-b" aria-label="Engagement sections">
         {(released ? TABS : [...TABS.filter((t) => t.prep), ...TABS.filter((t) => !t.prep)]).map((t) => {
           const enabled = released || t.prep;
-          const cls = "-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium whitespace-nowrap";
           return enabled ? (
             <Link
               key={t.key}
               href={`${base}?tab=${t.key}`}
               scroll={false}
               aria-current={tab === t.key ? "page" : undefined}
-              className={cn(cls, tab === t.key ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")}
+              className={tabClass(tab === t.key)}
             >
               {t.key === "team" ? <Users className="size-3.5" /> : t.key === "calendar" ? <CalendarDays className="size-3.5" /> : null}
               {t.label}
             </Link>
           ) : (
-            <span key={t.key} aria-disabled="true" title="Available once the request list is released" className={cn(cls, "cursor-not-allowed border-transparent text-muted-foreground/50")}>
+            <span key={t.key} aria-disabled="true" title="Available once the request list is released" className={cn(tabClass(false), "cursor-not-allowed text-muted-foreground/50 hover:border-transparent hover:text-muted-foreground/50")}>
               {t.label}
             </span>
           );
         })}
       </nav>
       <ActiveTabScroller />
-      <div>{content}</div>
-    </EngagementWorkspace>
+      <div className="pt-2">{content}</div>
+    </div>
   );
 }

@@ -3,16 +3,17 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Building2, Check, ChevronLeft, ChevronRight, Loader2, Search, ShieldAlert, UserCheck, X } from "lucide-react";
+import { Building2, Check, ChevronLeft, ChevronRight, ChevronsUpDown, Loader2, Search, ShieldAlert, UserCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { createClient } from "@/lib/supabase/client";
-import { MONTHS } from "@/lib/constants";
+import { MONTHS, TEAM_ROLE } from "@/lib/constants";
 import type { Client, ClientContact, EngagementType, MasterCategory, MasterItem, Person, TeamRole } from "@/lib/types";
 import { cn, friendlyError } from "@/lib/utils";
 
@@ -36,6 +37,62 @@ function defaultPeriod(c: Client | undefined) {
   return { start: prev.toISOString().slice(0, 10), end };
 }
 
+type PickRole = "partner" | "manager" | "member";
+
+/** Multi-select of firm users for one team role (shows job titles). */
+function StaffPicker({
+  id, label, help, staff, value, taken, onChange,
+}: {
+  id: string; label: string; help?: string; staff: Person[]; value: string[];
+  /** Users already chosen for another role (shown with that role, not selectable) */
+  taken: Map<string, string>;
+  onChange: (ids: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const names = value.map((v) => staff.find((s) => s.id === v)?.full_name ?? "").filter(Boolean);
+  const list = staff.filter((s) => !q || `${s.full_name} ${s.email} ${s.job_title ?? ""}`.toLowerCase().includes(q.toLowerCase()));
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button id={id} type="button" variant="outline" className="h-auto min-h-9 w-full justify-between py-1.5 font-normal" aria-describedby={help ? `${id}-help` : undefined}>
+            <span className="truncate text-left">{names.length ? names.join(", ") : <span className="text-muted-foreground">Nobody</span>}</span>
+            <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-[min(24rem,calc(100vw-2rem))] space-y-2 p-2">
+          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search people" aria-label={`Search ${label}`} className="h-8" />
+          <ul className="max-h-72 space-y-0.5 overflow-y-auto">
+            {list.map((s) => {
+              const other = taken.get(s.id);
+              const checked = value.includes(s.id);
+              return (
+                <li key={s.id}>
+                  <label className={cn("flex items-center gap-2 rounded-md px-1.5 py-1.5 text-sm", other ? "opacity-60" : "cursor-pointer hover:bg-muted/60")}>
+                    <Checkbox
+                      checked={checked}
+                      disabled={Boolean(other)}
+                      onCheckedChange={(v) => onChange(v === true ? [...value, s.id] : value.filter((x) => x !== s.id))}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate">{s.full_name || s.email}</span>
+                      <span className="block truncate text-xs text-muted-foreground">{[s.job_title, other ? `already ${other}` : null].filter(Boolean).join(" · ") || s.email}</span>
+                    </span>
+                  </label>
+                </li>
+              );
+            })}
+            {list.length === 0 ? <li className="p-2 text-sm text-muted-foreground">No one matches.</li> : null}
+          </ul>
+        </PopoverContent>
+      </Popover>
+      {help ? <p id={`${id}-help`} className="text-xs text-muted-foreground">{help}</p> : null}
+    </div>
+  );
+}
+
 export function NewEngagementWizard({
   me, initialClientId, clients, contacts, types, staff, categories, masterItems,
 }: {
@@ -53,9 +110,20 @@ export function NewEngagementWizard({
   const [start, setStart] = useState(period.start);
   const [end, setEnd] = useState(period.end);
   const [name, setName] = useState("");
-  const [leadId, setLeadId] = useState(me);
+  // The creator is not made lead or added to the team automatically.
+  const [leadId, setLeadId] = useState("");
   const [dueDate, setDueDate] = useState("");
-  const [team, setTeam] = useState<{ user_id: string; team_role: TeamRole }[]>([]);
+  const [team, setTeam] = useState<{ user_id: string; team_role: PickRole }[]>([]);
+  const roleIds = (r: PickRole) => team.filter((t) => t.team_role === r).map((t) => t.user_id);
+  const setRole = (r: PickRole, ids: string[]) =>
+    setTeam((all) => [...all.filter((t) => t.team_role !== r), ...ids.filter((id) => id !== leadId).map((user_id) => ({ user_id, team_role: r }))]);
+  const takenFor = (r: PickRole) => {
+    const m = new Map<string, string>();
+    if (leadId) m.set(leadId, TEAM_ROLE.lead.toLowerCase());
+    team.filter((t) => t.team_role !== r).forEach((t) => m.set(t.user_id, TEAM_ROLE[t.team_role as TeamRole].toLowerCase()));
+    return m;
+  };
+  const meOnTeam = leadId === me || team.some((t) => t.user_id === me);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [proposedFor, setProposedFor] = useState<string | null>(null);
@@ -124,7 +192,7 @@ export function NewEngagementWizard({
     }
     toast.success(
       access.size
-        ? `Engagement created as a draft. ${access.size} client user${access.size === 1 ? "" : "s"} can see it as "being prepared" until you release the list.`
+        ? `Engagement created as a draft. ${access.size} client user${access.size === 1 ? "" : "s"} can see it as "Request in progress" until you release the list.`
         : "Engagement created as a draft. Customise the list, invite the client, then release it.",
     );
     router.push(`/engagements/${data}?tab=requests`);
@@ -234,44 +302,31 @@ export function NewEngagementWizard({
               <Input id="pe" type="date" value={end} onChange={(e) => setEnd(e.target.value)} required />
             </div>
             <div className="space-y-2">
-              <Label>Engagement lead</Label>
-              <Select value={leadId} onValueChange={setLeadId}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{staff.map((s) => <SelectItem key={s.id} value={s.id}>{s.full_name || s.email}</SelectItem>)}</SelectContent>
+              <Label htmlFor="lead">Team lead <span className="text-destructive" aria-hidden>*</span></Label>
+              <Select value={leadId} onValueChange={(v) => { setLeadId(v); setTeam((all) => all.filter((t) => t.user_id !== v)); }}>
+                <SelectTrigger id="lead" aria-required="true" aria-describedby="lead-help"><SelectValue placeholder="Choose the team lead" /></SelectTrigger>
+                <SelectContent>
+                  {staff.map((s) => <SelectItem key={s.id} value={s.id}>{s.full_name || s.email}{s.job_title ? ` · ${s.job_title}` : ""}</SelectItem>)}
+                </SelectContent>
               </Select>
+              <p id="lead-help" className="text-xs text-muted-foreground">Exactly one. It can be changed later from the Team tab.</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="dd">Default due date for items</Label>
               <Input id="dd" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
               <p className="text-xs text-muted-foreground">You can change due dates per item or in bulk later.</p>
             </div>
-            <div className="space-y-2 md:col-span-2">
-              <Label>Team</Label>
-              <div className="space-y-2">
-                {team.map((t) => {
-                  const p = staff.find((s) => s.id === t.user_id);
-                  return (
-                    <div key={t.user_id} className="flex items-center gap-2 rounded-md border px-3 py-1.5">
-                      <span className="flex-1 text-sm">{p?.full_name}</span>
-                      <Select value={t.team_role} onValueChange={(v) => setTeam((all) => all.map((x) => (x.user_id === t.user_id ? { ...x, team_role: v as TeamRole } : x)))}>
-                        <SelectTrigger className="h-8 w-36"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="manager">Manager</SelectItem>
-                          <SelectItem value="member">Member</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <Button size="icon-sm" variant="ghost" onClick={() => setTeam((all) => all.filter((x) => x.user_id !== t.user_id))} aria-label="Remove"><X /></Button>
-                    </div>
-                  );
-                })}
-                <Select value="" onValueChange={(v) => setTeam((all) => [...all, { user_id: v, team_role: "member" }])}>
-                  <SelectTrigger aria-label="Add team member"><SelectValue placeholder="Add team member…" /></SelectTrigger>
-                  <SelectContent>
-                    {staff.filter((s) => s.id !== leadId && !team.some((t) => t.user_id === s.id)).map((s) => <SelectItem key={s.id} value={s.id}>{s.full_name || s.email}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
+            <fieldset className="grid gap-4 md:col-span-2 md:grid-cols-3">
+              <legend className="mb-2 text-sm font-medium">Engagement team</legend>
+              <StaffPicker id="partners" label={`${TEAM_ROLE.partner}(s)`} help="Same powers as the team lead." staff={staff} value={roleIds("partner")} taken={takenFor("partner")} onChange={(ids) => setRole("partner", ids)} />
+              <StaffPicker id="managers" label="Managers" staff={staff} value={roleIds("manager")} taken={takenFor("manager")} onChange={(ids) => setRole("manager", ids)} />
+              <StaffPicker id="members" label="Team members" staff={staff} value={roleIds("member")} taken={takenFor("member")} onChange={(ids) => setRole("member", ids)} />
+              {!meOnTeam ? (
+                <p className="text-xs text-muted-foreground md:col-span-3">
+                  You are not on this team. As the creator you can still open the engagement, but only the team works on it.
+                </p>
+              ) : null}
+            </fieldset>
             <fieldset className="space-y-2 md:col-span-2">
               <legend className="text-sm font-medium">Planned dates</legend>
               <p className="text-xs text-muted-foreground">Shown on the engagement calendar for the team and the client. You can change them later in Settings.</p>
@@ -294,7 +349,7 @@ export function NewEngagementWizard({
             <fieldset className="space-y-2 md:col-span-2">
               <legend className="flex items-center gap-2 text-sm font-medium"><UserCheck className="size-4 text-muted-foreground" /> Client access</legend>
               <p className="text-xs text-muted-foreground">
-                Ticked client users see this engagement straight away as &quot;Being prepared&quot; (team and key dates only). They see the request list once it is approved and released.
+                Ticked client users see this engagement straight away as &quot;Request in progress&quot; (team and key dates only). They see the request list once it is approved and released.
               </p>
               {clientContacts.length === 0 ? (
                 <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">This client has no contacts yet. Invite client users from the engagement&apos;s Team tab.</p>
@@ -377,7 +432,7 @@ export function NewEngagementWizard({
         <Card>
           <CardHeader>
             <CardTitle>Review and create</CardTitle>
-            <CardDescription>The engagement is created as a draft. Client users with access see it as &quot;Being prepared&quot; until the request list is approved and released.</CardDescription>
+            <CardDescription>The engagement is created as a draft. Client users with access see it as &quot;Request in progress&quot; until the request list is approved and released.</CardDescription>
           </CardHeader>
           <CardContent>
             <dl className="grid grid-cols-[7.5rem_1fr] gap-x-4 gap-y-2 text-sm sm:grid-cols-[10rem_1fr]">
@@ -385,8 +440,13 @@ export function NewEngagementWizard({
               <dt className="text-muted-foreground">Type</dt><dd>{type?.name}</dd>
               <dt className="text-muted-foreground">Name</dt><dd>{name || `${type?.name} — FY${end.slice(0, 4)}`}</dd>
               <dt className="text-muted-foreground">Period</dt><dd>{start || "—"} to {end}</dd>
-              <dt className="text-muted-foreground">Lead</dt><dd>{staff.find((s) => s.id === leadId)?.full_name}</dd>
-              <dt className="text-muted-foreground">Team</dt><dd>{team.length ? team.map((t) => staff.find((s) => s.id === t.user_id)?.full_name).join(", ") : "Lead only"}</dd>
+              <dt className="text-muted-foreground">{TEAM_ROLE.lead}</dt><dd>{staff.find((s) => s.id === leadId)?.full_name ?? "—"}</dd>
+              {(["partner", "manager", "member"] as const).map((r) => (
+                <div key={r} className="contents">
+                  <dt className="text-muted-foreground">{r === "partner" ? "Partners" : r === "manager" ? "Managers" : "Team members"}</dt>
+                  <dd>{roleIds(r).map((id) => staff.find((s) => s.id === id)?.full_name).join(", ") || "—"}</dd>
+                </div>
+              ))}
               <dt className="text-muted-foreground">Request items</dt><dd>{selected.size} ({critical} critical / pre-engagement)</dd>
               <dt className="text-muted-foreground">Default due date</dt><dd>{dueDate || "Not set"}</dd>
               <dt className="text-muted-foreground">Planned dates</dt>

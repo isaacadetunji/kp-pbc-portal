@@ -4,15 +4,15 @@ import { AdditionalDocuments } from "@/components/engagement/additional-document
 import { AttachmentsPanel } from "@/components/engagement/attachments-panel";
 import { EngagementCalendar } from "@/components/engagement/engagement-calendar";
 import { EngagementHeader } from "@/components/engagement/engagement-header";
-import { EngagementWorkspace } from "@/components/engagement/engagement-nav";
 import { EngagementSettings } from "@/components/engagement/engagement-settings";
 import { ProgressPanel } from "@/components/engagement/progress-panel";
 import { RealtimeRefresh } from "@/components/engagement/realtime-refresh";
 import { RequestList, type MasterOption } from "@/components/engagement/request-list";
+import { StageActions } from "@/components/engagement/stage-actions";
 import { TeamAccess } from "@/components/engagement/team-access";
 import { loadAttachments, publicAttachment } from "@/lib/attachments";
-import { requireStaff } from "@/lib/auth";
-import { engagementMilestones, groupByClient, loadEngagement, loadEngagementNav, type ClientAccessRow } from "@/lib/engagement-data";
+import { getPermissions, requireStaff } from "@/lib/auth";
+import { engagementMilestones, loadEngagement, loadClientUsers, type ClientAccessRow } from "@/lib/engagement-data";
 import { getUploadSettings } from "@/lib/settings";
 import type { ClientContact, EngagementDocument, EngagementEvent, Person } from "@/lib/types";
 
@@ -40,25 +40,23 @@ export default async function EngagementPage({
   const { supabase, profile } = await requireStaff();
   const bundle = await loadEngagement(supabase, id);
   if (!bundle) notFound();
-  const { engagement, client, type, folders, items, team, progress, folderProgress, fileCounts, commentCounts } = bundle;
+  const { engagement, client, type, folders, items, team, progress, folderProgress, fileCounts, commentCounts, assignees } = bundle;
 
-  const [canManage, canAccept, isLead, canEdit, upload, navMine] = await Promise.all([
+  const [canManage, canAccept, isLead, canEdit, isTeam, upload, appPerms, clientUsers] = await Promise.all([
     supabase.rpc("can_manage_engagement", { p_engagement_id: id }).then((r) => Boolean(r.data)),
     supabase.rpc("can_accept_items", { p_engagement_id: id }).then((r) => Boolean(r.data)),
     supabase.rpc("is_engagement_lead", { p_engagement_id: id }).then((r) => Boolean(r.data)),
     supabase.rpc("can_edit_request_list", { p_engagement_id: id }).then((r) => Boolean(r.data)),
+    supabase.rpc("is_engagement_team", { p_engagement_id: id }).then((r) => Boolean(r.data)),
     getUploadSettings(),
-    loadEngagementNav(supabase, { userId: profile.id, scope: "mine" }),
+    getPermissions(),
+    loadClientUsers(supabase, id),
   ]);
-  // Admins can open engagements they are not on; keep the current one in the list.
-  let nav = navMine;
-  if (!nav.some((n) => n.id === id)) {
-    const all = await loadEngagementNav(supabase, { userId: profile.id, scope: "all", includeArchived: true });
-    nav = [...nav, ...all.filter((n) => n.id === id)];
-  }
   const tabs = ALL_TABS.filter((t) => t.key !== "settings" || canManage);
   const tab = tabs.some((t) => t.key === tabParam) ? tabParam! : "requests";
-  const perms = { canManage, canAccept, isLead, canEdit };
+  const perms = { canManage, canAccept, isLead, canEdit, isTeam };
+  const criticalOpen = items.filter((i) => i.is_critical && !i.is_waived && i.status !== "accepted").length;
+  const openItems = items.filter((i) => !i.is_waived && i.status !== "accepted" && i.status !== "not_applicable").length;
   const allowed = upload.allowedExtensions;
   const maxMb = engagement.max_upload_mb ?? upload.maxFileMb;
   const base = `/engagements/${id}`;
@@ -99,6 +97,8 @@ export default async function EngagementPage({
         items={items}
         folders={folders}
         team={team}
+        clientUsers={clientUsers}
+        assignees={assignees}
         fileCounts={fileCounts}
         commentCounts={commentCounts}
         perms={perms}
@@ -153,7 +153,7 @@ export default async function EngagementPage({
     );
   } else if (tab === "team") {
     const [{ data: staff }, { data: access }, { data: contacts }] = await Promise.all([
-      supabase.from("profiles").select("id, full_name, email, app_role").in("app_role", ["super_admin", "admin", "staff"]).eq("is_active", true).order("full_name"),
+      supabase.from("profiles").select("id, full_name, email, app_role, job_title").in("app_role", ["super_admin", "admin", "staff"]).eq("is_active", true).order("full_name"),
       supabase
         .from("engagement_client_access")
         .select("id, invited_at, first_login_at, revoked_at, contact:contact_id(*)")
@@ -169,6 +169,8 @@ export default async function EngagementPage({
         access={(access as unknown as ClientAccessRow[]) ?? []}
         contacts={(contacts as ClientContact[]) ?? []}
         canManage={canManage}
+        isLead={isLead}
+        userId={profile.id}
         isDraft={engagement.status === "draft" || engagement.status === "awaiting_approval"}
       />
     );
@@ -180,10 +182,28 @@ export default async function EngagementPage({
   }
 
   return (
-    <EngagementWorkspace groups={groupByClient(nav)} activeId={id} hrefBase="/engagements">
+    <div className="min-w-0 space-y-4">
       <RealtimeRefresh engagementId={id} />
-      <EngagementHeader engagement={engagement} client={client} type={type} basePath={base} tab={tab} tabs={tabs} />
+      <EngagementHeader
+        engagement={engagement}
+        client={client}
+        type={type}
+        basePath={base}
+        tab={tab}
+        tabs={tabs}
+        actions={
+          <StageActions
+            engagementId={id}
+            status={engagement.status}
+            canManage={canManage}
+            isLead={isLead}
+            isSuperAdmin={appPerms.isSuperAdmin}
+            criticalOpen={criticalOpen}
+            openItems={openItems}
+          />
+        }
+      />
       <div className="pt-2">{content}</div>
-    </EngagementWorkspace>
+    </div>
   );
 }

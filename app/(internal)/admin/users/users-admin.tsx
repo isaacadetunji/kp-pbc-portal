@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Mail, Search, UserPlus } from "lucide-react";
+import { FileSpreadsheet, Mail, Search, UserPlus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -16,12 +16,14 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { inviteStaffUser, updateUser } from "@/lib/actions/admin";
 import { fmtDateTime } from "@/lib/dates";
 import type { AppRole, Profile } from "@/lib/types";
+import { BulkUploadDialog } from "./bulk-upload-dialog";
 
 export function UsersAdmin({ users, me, myRole }: { users: Profile[]; me: string; myRole: AppRole }) {
   const isSuper = myRole === "super_admin";
   const [view, setView] = useState<"firm" | "client">("firm");
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [form, setForm] = useState({ fullName: "", email: "", role: "staff" as "staff" | "admin" | "super_admin", jobTitle: "" });
   const [busy, setBusy] = useState(false);
 
@@ -63,6 +65,7 @@ export function UsersAdmin({ users, me, myRole }: { users: Profile[]; me: string
           <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name or email" className="pl-9" />
         </div>
+        <Button variant="outline" onClick={() => setBulkOpen(true)}><FileSpreadsheet /> Bulk upload</Button>
         <Button onClick={() => setOpen(true)}><UserPlus /> Invite firm user</Button>
       </div>
       {view === "client" ? (
@@ -119,6 +122,8 @@ export function UsersAdmin({ users, me, myRole }: { users: Profile[]; me: string
           </TableBody>
         </Table>
       </Card>
+
+      <BulkUploadDialog open={bulkOpen} onOpenChange={setBulkOpen} isSuper={isSuper} />
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>

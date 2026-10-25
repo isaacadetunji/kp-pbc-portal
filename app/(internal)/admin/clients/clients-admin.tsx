@@ -34,8 +34,12 @@ export interface ClientEngagement {
 }
 
 export function ClientsAdmin({
-  clients, contacts, engagementCounts, engagements = [], mode, groups,
-}: { clients: Client[]; contacts: ClientContact[]; engagementCounts: Record<string, number>; engagements?: ClientEngagement[]; mode: string; groups: ClientGroup[] }) {
+  clients, contacts, engagementCounts, engagements = [], mode, groups, canCreateEngagements = false,
+}: {
+  clients: Client[]; contacts: ClientContact[]; engagementCounts: Record<string, number>; engagements?: ClientEngagement[]; mode: string; groups: ClientGroup[];
+  /** create_engagements permission (Settings > Access) */
+  canCreateEngagements?: boolean;
+}) {
   const [detail, setDetail] = useState<Client | null>(null);
   const NONE = "__none";
   const [groupFilter, setGroupFilter] = useState("__all");
@@ -255,9 +259,11 @@ export function ClientsAdmin({
                     {detail.year_end_month ? ` · Year end ${detail.year_end_day} ${MONTHS[detail.year_end_month - 1]}` : ""}
                   </SheetDescription>
                   <div className="flex flex-wrap gap-2 pt-2">
-                    <Button asChild size="sm">
-                      <Link href={`/engagements/new?client=${detail.id}`}><Plus /> New engagement</Link>
-                    </Button>
+                    {canCreateEngagements ? (
+                      <Button asChild size="sm">
+                        <Link href={`/engagements/new?client=${detail.id}`}><Plus /> New engagement</Link>
+                      </Button>
+                    ) : null}
                     <Button size="sm" variant="outline" onClick={() => openContact(detail)}><UserPlus /> Add contact</Button>
                   </div>
                 </SheetHeader>

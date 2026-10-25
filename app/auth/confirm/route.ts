@@ -16,6 +16,19 @@ export async function GET(request: NextRequest) {
   const nextParam = url.searchParams.get("next") ?? "/";
   const next = nextParam.startsWith("/") && !nextParam.startsWith("//") ? nextParam : "/";
 
+  // No token in the query: the session is in the URL fragment (default Supabase
+  // email templates / admin-sent links), which only the browser can read.
+  // Browsers keep the fragment across this redirect.
+  if (!tokenHash && !code) {
+    const dest = new URL("/auth/complete", url.origin);
+    dest.searchParams.set("next", next);
+    for (const k of ["error", "error_code", "error_description"]) {
+      const v = url.searchParams.get(k);
+      if (v) dest.searchParams.set(k, v);
+    }
+    return NextResponse.redirect(dest);
+  }
+
   const supabase = await createClient();
   let ok = false;
   if (tokenHash && type) {
