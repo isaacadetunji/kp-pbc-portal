@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Building2, Mail, Phone, ShieldCheck, Trash2, UserPlus, UserX, Users } from "lucide-react";
+import { Building2, Crown, Mail, Phone, ShieldCheck, Trash2, UserPlus, UserX, Users } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { inviteClientContact } from "@/lib/actions/engagements";
 import { createClient } from "@/lib/supabase/client";
-import { TEAM_ROLE } from "@/lib/constants";
+import { TEAM_ROLE, TEAM_ROLE_ORDER } from "@/lib/constants";
 import { fmtDateTime } from "@/lib/dates";
 import type { ClientAccessRow, TeamMember } from "@/lib/engagement-data";
 import type { ClientContact, Person, TeamRole } from "@/lib/types";
@@ -50,6 +50,8 @@ export function TeamAccess({
   access,
   contacts,
   canManage,
+  isLead = false,
+  userId,
   isDraft,
   audience = "team",
 }: {
@@ -59,6 +61,9 @@ export function TeamAccess({
   access: ClientAccessRow[];
   contacts: ClientContact[];
   canManage: boolean;
+  /** Partner or team lead (or Super admin): may add / remove partners */
+  isLead?: boolean;
+  userId?: string;
   isDraft: boolean;
   audience?: "team" | "client";
 }) {
@@ -66,6 +71,7 @@ export function TeamAccess({
   const supabase = createClient();
   const [addUser, setAddUser] = useState("");
   const [addRole, setAddRole] = useState<TeamRole>("member");
+  const [leadPick, setLeadPick] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
   const [contactId, setContactId] = useState<string>(NEW);
   const [form, setForm] = useState({ fullName: "", email: "", phone: "", position: "" });
@@ -74,6 +80,24 @@ export function TeamAccess({
   const manage = isTeam && canManage;
 
   const onTeam = new Set(team.map((t) => t.id));
+  const lead = team.find((t) => t.team_role === "lead");
+  // Roles a user may give by direct edit (the lead changes through set_engagement_lead)
+  const assignable = TEAM_ROLE_ORDER.filter((r) => r !== "lead" && (r !== "partner" || isLead));
+  const canEditRow = (r: TeamRole) => manage && r !== "lead" && (r !== "partner" || isLead);
+
+  async function changeLead(newLead: string) {
+    if (!newLead) return;
+    const person = staff.find((s) => s.id === newLead) ?? team.find((t) => t.id === newLead);
+    if (!confirm(`Make ${person?.full_name ?? "this person"} the team lead?${lead ? ` ${lead.full_name} becomes a manager.` : ""}`)) {
+      setLeadPick("");
+      return;
+    }
+    const { error } = await supabase.rpc("set_engagement_lead", { p_engagement_id: engagementId, p_user_id: newLead });
+    if (error) return toast.error(friendlyError(error));
+    toast.success(`${person?.full_name ?? "New lead"} is now the team lead`);
+    setLeadPick("");
+    router.refresh();
+  }
   const granted = new Set(access.filter((a) => !a.revoked_at).map((a) => a.contact.id));
   const visibleAccess = isTeam ? access : access.filter((a) => !a.revoked_at);
 
@@ -116,7 +140,7 @@ export function TeamAccess({
         ? `Invitation sent to ${res.data.email}`
         : res.data.invited === "magic_link"
           ? `Access granted and sign-in link sent to ${res.data.email}`
-          : `Access granted to ${res.data.email}${isDraft ? ". They see the engagement as \"being prepared\" until the list is released." : ""}`,
+          : `Access granted to ${res.data.email}${isDraft ? ". They see the engagement as \"Request in progress\" until the list is released." : ""}`,
     );
     setInviteOpen(false);
     setForm({ fullName: "", email: "", phone: "", position: "" });
@@ -137,7 +161,7 @@ export function TeamAccess({
           <CardTitle className="flex items-center gap-2"><Users className="size-4" /> Engagement team</CardTitle>
           <CardDescription>
             {isTeam
-              ? "Leads and managers can edit the request list and invite client users. Only the lead can waive critical items and make the acceptance decision."
+              ? "Partners, the team lead and managers edit the request list, invite client users, approve and move the stage. Partners and the team lead can also waive critical items and complete an engagement with open items. There is exactly one team lead."
               : `The ${team.length} people at the firm working on this engagement.`}
           </CardDescription>
         </CardHeader>
@@ -151,25 +175,26 @@ export function TeamAccess({
                     <span className="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-xs font-semibold text-primary-foreground" aria-hidden>{initials(t.full_name)}</span>
                     <div className="min-w-0">
                       <div className="truncate text-sm font-medium">{t.full_name || t.email}</div>
-                      <div className="truncate text-xs text-muted-foreground">{t.job_title ?? "—"}</div>
+                      <div className="truncate text-xs text-muted-foreground">{t.job_title ?? "—"}{t.id === userId ? " · you" : ""}</div>
                     </div>
                   </div>
                   <div>
-                    {manage && t.team_role !== "lead" ? (
+                    {canEditRow(t.team_role) ? (
                       <Select value={t.team_role} onValueChange={(v) => changeRole(t.id, v as TeamRole)}>
-                        <SelectTrigger className="h-8 w-36" aria-label={`Role of ${t.full_name}`}><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="h-8 w-40" aria-label={`Role of ${t.full_name}`}><SelectValue /></SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="manager">{TEAM_ROLE.manager}</SelectItem>
-                          <SelectItem value="member">{TEAM_ROLE.member}</SelectItem>
+                          {assignable.map((r) => <SelectItem key={r} value={r}>{TEAM_ROLE[r]}</SelectItem>)}
                         </SelectContent>
                       </Select>
                     ) : (
-                      <Badge variant={t.team_role === "lead" ? "default" : t.team_role === "manager" ? "info" : "secondary"}>{TEAM_ROLE[t.team_role]}</Badge>
+                      <Badge variant={t.team_role === "lead" || t.team_role === "partner" ? "default" : t.team_role === "manager" ? "info" : "secondary"}>
+                        {t.team_role === "lead" ? <Crown /> : null}{TEAM_ROLE[t.team_role]}
+                      </Badge>
                     )}
                   </div>
                   <Contact email={t.email} phone={t.phone} />
                   <div className="flex justify-end">
-                    {manage && t.team_role !== "lead" ? (
+                    {canEditRow(t.team_role) ? (
                       <Button size="icon-sm" variant="ghost" onClick={() => removeMember(t.id)} aria-label={`Remove ${t.full_name}`}><Trash2 /></Button>
                     ) : null}
                   </div>
@@ -178,18 +203,31 @@ export function TeamAccess({
             </ul>
           </div>
           {manage ? (
+            <div className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3 sm:flex-row sm:items-center">
+              <label htmlFor="lead-pick" className="flex items-center gap-2 text-sm font-medium sm:w-44"><Crown className="size-4 text-muted-foreground" /> Change team lead</label>
+              <Select value={leadPick} onValueChange={(v) => { setLeadPick(v); changeLead(v); }}>
+                <SelectTrigger id="lead-pick" className="flex-1" aria-describedby="lead-pick-help"><SelectValue placeholder={lead ? `Current: ${lead.full_name}` : "Choose the team lead"} /></SelectTrigger>
+                <SelectContent>
+                  {staff.filter((s) => s.id !== lead?.id).map((s) => (
+                    <SelectItem key={s.id} value={s.id}>{s.full_name || s.email}{s.job_title ? ` · ${s.job_title}` : ""}{onTeam.has(s.id) ? "" : " (not on the team yet)"}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <span id="lead-pick-help" className="text-xs text-muted-foreground sm:w-48">The previous lead becomes a manager.</span>
+            </div>
+          ) : null}
+          {manage ? (
             <div className="flex flex-col gap-2 sm:flex-row">
               <Select value={addUser} onValueChange={setAddUser}>
                 <SelectTrigger className="flex-1" aria-label="Colleague to add"><SelectValue placeholder="Add a colleague…" /></SelectTrigger>
                 <SelectContent>
-                  {staff.filter((s) => !onTeam.has(s.id)).map((s) => <SelectItem key={s.id} value={s.id}>{s.full_name || s.email}</SelectItem>)}
+                  {staff.filter((s) => !onTeam.has(s.id)).map((s) => <SelectItem key={s.id} value={s.id}>{s.full_name || s.email}{s.job_title ? ` · ${s.job_title}` : ""}</SelectItem>)}
                 </SelectContent>
               </Select>
               <Select value={addRole} onValueChange={(v) => setAddRole(v as TeamRole)}>
-                <SelectTrigger className="sm:w-36" aria-label="Role for the new colleague"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="sm:w-44" aria-label="Role for the new colleague"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="manager">{TEAM_ROLE.manager}</SelectItem>
-                  <SelectItem value="member">{TEAM_ROLE.member}</SelectItem>
+                  {assignable.map((r) => <SelectItem key={r} value={r}>{TEAM_ROLE[r]}</SelectItem>)}
                 </SelectContent>
               </Select>
               <Button onClick={addMember} disabled={!addUser}><UserPlus /> Add</Button>
@@ -205,7 +243,7 @@ export function TeamAccess({
           </CardTitle>
           <CardDescription>
             {isTeam
-              ? "Client users with portal access to this engagement. Before release they see it as \"being prepared\" (team and calendar only); after release they see the request list, their uploads and non-internal comments."
+              ? "Client users with portal access to this engagement. Before release they see it as \"Request in progress\" (team and calendar only); after release they see the request list, their uploads and non-internal comments."
               : "People at your organisation who can see this engagement."}
           </CardDescription>
         </CardHeader>
@@ -221,7 +259,7 @@ export function TeamAccess({
                 {visibleAccess.map((a) => (
                   <li key={a.id} className={cn(ROW, a.revoked_at && "bg-muted/30")}>
                     <div className="flex min-w-0 items-center gap-3">
-                      <span className="grid size-8 shrink-0 place-items-center rounded-full bg-brand-accent text-xs font-semibold text-white" aria-hidden>{initials(a.contact.full_name)}</span>
+                      <span className="grid size-8 shrink-0 place-items-center rounded-full bg-client-soft text-xs font-semibold text-client" aria-hidden>{initials(a.contact.full_name)}</span>
                       <div className="min-w-0">
                         <div className="truncate text-sm font-medium">{a.contact.full_name}</div>
                         <div className="truncate text-xs text-muted-foreground">{a.contact.position ?? "—"}</div>

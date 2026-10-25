@@ -1,22 +1,28 @@
 import Link from "next/link";
 import { AlertTriangle, CheckCircle2, Clock, Hourglass, ShieldAlert, TrendingDown } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
+import { Progress, ProgressLegend } from "@/components/ui/progress";
 import { fmtDate } from "@/lib/dates";
 import type { EngagementProgress, FolderProgress, RequestItem } from "@/lib/types";
+import { progressBarClass, progressTextClass } from "@/lib/progress";
 import { cn, pct } from "@/lib/utils";
 
+/** KPI card. With a meter, the figure and bar follow the shared red / amber / green rule. */
 function Stat({
-  label, value, sub, meter, tone = "primary", emphasis,
+  label, value, sub, meter, emphasis, icon: Icon,
 }: {
-  label: string; value: string; sub?: string; meter?: number; tone?: "primary" | "accent" | "success" | "warning"; emphasis?: boolean;
+  label: string; value: string; sub?: string; meter?: number; emphasis?: boolean; icon?: React.ComponentType<{ className?: string }>;
 }) {
   return (
-    <Card className={cn(emphasis && "border-brand-accent/60 ring-1 ring-brand-accent/30")}>
-      <CardContent className="space-y-2 py-4">
-        <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{label}</div>
-        <div className={cn("tabular font-semibold tracking-tight", emphasis ? "text-4xl" : "text-3xl")}>{value}</div>
-        {meter !== undefined ? <Progress value={meter} tone={tone} label={label} /> : null}
+    <Card className={cn("relative overflow-hidden", emphasis && "border-primary/25 ring-1 ring-primary/10")}>
+      {emphasis ? <span aria-hidden className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-brand-accent to-brand-blue" /> : null}
+      <CardContent className="space-y-2.5 py-5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="eyebrow">{label}</div>
+          {Icon ? <Icon className="size-4 text-subtle-foreground" /> : null}
+        </div>
+        <div className={cn("font-display leading-none font-bold tracking-[-0.02em] tabular", emphasis ? "text-[40px]" : "text-[34px]", meter !== undefined && progressTextClass(meter))}>{value}</div>
+        {meter !== undefined ? <Progress value={meter} tone="auto" label={label} /> : null}
         {sub ? <div className="text-xs text-muted-foreground">{sub}</div> : null}
       </CardContent>
     </Card>
@@ -33,7 +39,7 @@ function ItemList({
       <CardHeader className="pb-0">
         <CardTitle className="flex items-center gap-2 text-sm">
           <Icon className={cn("size-4", tone)} /> {title}
-          <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-xs tabular">{items.length}</span>
+          <span className="ml-auto rounded-full border bg-muted/60 px-2 text-xs leading-5 font-semibold tabular">{items.length}</span>
         </CardTitle>
       </CardHeader>
       <CardContent className="pt-3">
@@ -43,10 +49,10 @@ function ItemList({
           <ul className="divide-y">
             {items.slice(0, 8).map((i) => (
               <li key={i.id}>
-                <Link href={hrefFor(i)} className="flex items-center gap-2 py-2 text-sm hover:text-primary">
-                  <span className="font-mono text-xs text-muted-foreground">{i.code}</span>
+                <Link href={hrefFor(i)} className="-mx-2 flex items-center gap-2.5 rounded-md px-2 py-2 text-sm transition-colors hover:bg-accent/40 hover:text-primary">
+                  <span className="w-14 shrink-0 font-mono text-[11px] text-muted-foreground">{i.code}</span>
                   <span className="min-w-0 flex-1 truncate">{i.title}</span>
-                  <span className="text-xs text-muted-foreground">{fmtDate(i.due_date, "d MMM")}</span>
+                  <span className="text-xs text-muted-foreground tabular">{fmtDate(i.due_date, "d MMM")}</span>
                 </Link>
               </li>
             ))}
@@ -83,20 +89,20 @@ export function ProgressPanel({
   return (
     <div className="space-y-6">
       {audience === "client" && behind.length ? (
-        <Card className="border-warning/40 bg-warning-soft/40">
+        <Card className="border-warning/25 bg-warning-soft/50">
           <CardHeader className="pb-0">
             <CardTitle className="flex items-center gap-2 text-sm"><TrendingDown className="size-4 text-warning" /> Where you&apos;re behind</CardTitle>
           </CardHeader>
           <CardContent className="pt-3">
             <ul className="grid gap-3 md:grid-cols-3">
               {behind.map((f) => (
-                <li key={f.folder_id} className="rounded-lg border bg-card p-3">
+                <li key={f.folder_id} className="rounded-lg border bg-card p-3 shadow-xs">
                   <div className="truncate text-sm font-medium">{f.folder_name}</div>
                   <div className="mt-1 flex items-baseline justify-between text-xs text-muted-foreground">
                     <span>{f.applicable_items - f.submitted_items} still to provide{f.overdue_items ? ` · ${f.overdue_items} overdue` : ""}</span>
-                    <span className="font-semibold text-foreground tabular">{pct(f.pct_submitted)}</span>
+                    <span className={cn("font-semibold tabular", progressTextClass(f.pct_submitted))}>{pct(f.pct_submitted)}</span>
                   </div>
-                  <Progress className="mt-2" value={f.pct_submitted} tone="warning" label={`${f.folder_name} provided`} />
+                  <Progress className="mt-2" value={f.pct_submitted} tone="auto" label={`${f.folder_name} provided`} />
                 </li>
               ))}
             </ul>
@@ -109,7 +115,7 @@ export function ProgressPanel({
           value={p?.pct_critical === null || p?.pct_critical === undefined ? "None" : pct(p.pct_critical)}
           sub={p?.critical_total ? `${p.critical_satisfied} of ${p.critical_total} accepted or waived` : "No pre-engagement items"}
           meter={p?.pct_critical ?? undefined}
-          tone="accent"
+          icon={ShieldAlert}
           emphasis
         />
         <Stat
@@ -117,60 +123,63 @@ export function ProgressPanel({
           value={pct(p?.pct_provided ?? 0)}
           sub={`${p?.accepted_items ?? 0} of ${p?.applicable_items ?? 0} items accepted`}
           meter={p?.pct_provided ?? 0}
-          tone="success"
+          icon={CheckCircle2}
         />
         <Stat
           label="Submitted"
           value={pct(p?.pct_submitted ?? 0)}
           sub={`${p?.submitted_items ?? 0} of ${p?.applicable_items ?? 0} items received`}
           meter={p?.pct_submitted ?? 0}
+          icon={Hourglass}
         />
         <Stat
           label={audience === "client" ? "Needs your action" : "Outstanding"}
           value={String((p?.requested_items ?? 0) + (p?.queried_items ?? 0))}
           sub={`${p?.overdue_items ?? 0} overdue · ${p?.queried_items ?? 0} queried${p?.na_items ? ` · ${p.na_items} N/A` : ""}`}
+          icon={AlertTriangle}
         />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1.3fr_1fr]">
         <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">Completion by folder</CardTitle>
+          <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 border-b pb-4">
+            <CardTitle>Completion by folder</CardTitle>
+            <ProgressLegend />
           </CardHeader>
-          <CardContent className="space-y-3 pt-3">
+          <CardContent className="space-y-4 pt-4">
             {folders.length === 0 ? <p className="text-sm text-muted-foreground">No folders yet.</p> : null}
             {folders
               .filter((f) => f.total_items > 0)
               .sort((a, b) => a.sort_order - b.sort_order)
               .map((f) => (
                 <div key={f.folder_id} className="grid grid-cols-1 items-center gap-x-3 gap-y-1 sm:grid-cols-[minmax(0,1fr)_auto]">
-                  <div className="truncate text-sm">{f.folder_name}</div>
+                  <div className="truncate text-sm font-medium">{f.folder_name}</div>
                   <div className="tabular text-xs text-muted-foreground">
                     {audience === "client"
                       ? `${f.accepted_items} of ${f.applicable_items} complete · ${f.applicable_items - f.submitted_items} to provide · `
                       : `${f.accepted_items}/${f.applicable_items} · `}
-                    <span className="font-medium text-foreground">{pct(f.pct_provided)}</span>
+                    <span className={cn("font-semibold", progressTextClass(f.pct_provided))}>{pct(f.pct_provided)}</span>
                   </div>
-                  <div className="relative col-span-full h-2 overflow-hidden rounded-full bg-muted" role="img" aria-label={`${f.folder_name}: ${pct(f.pct_provided)} accepted, ${pct(f.pct_submitted)} submitted`}>
-                    <div className="absolute inset-y-0 left-0 rounded-full bg-primary/25" style={{ width: `${f.pct_submitted}%` }} />
-                    <div className="absolute inset-y-0 left-0 rounded-full bg-success" style={{ width: `${f.pct_provided}%` }} />
+                  <div className="relative col-span-full h-2 overflow-hidden rounded-full bg-[#e3e8ef]" role="img" aria-label={`${f.folder_name}: ${pct(f.pct_provided)} accepted, ${pct(f.pct_submitted)} submitted`}>
+                    <div className="absolute inset-y-0 left-0 rounded-full bg-[repeating-linear-gradient(135deg,#b9c4d2_0_3px,#cfd7e2_3px_6px)]" style={{ width: `${f.pct_submitted}%` }} />
+                    <div className={cn("absolute inset-y-0 left-0 rounded-full", progressBarClass(f.pct_provided), f.pct_provided > 0 && "min-w-1.5")} style={{ width: `${f.pct_provided}%` }} />
                   </div>
                 </div>
               ))}
-            <div className="flex gap-4 pt-1 text-xs text-muted-foreground">
-              <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-success" /> Accepted</span>
-              <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-primary/25" /> Submitted, awaiting review</span>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 border-t pt-3 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1.5"><span className="h-2 w-4 rounded-full bg-gradient-to-r from-danger-bar via-warning-bar to-success-bar" /> Accepted (colour shows how far along)</span>
+              <span className="flex items-center gap-1.5"><span className="h-2 w-4 rounded-full bg-[repeating-linear-gradient(135deg,#b9c4d2_0_3px,#cfd7e2_3px_6px)]" /> Submitted, awaiting review</span>
             </div>
           </CardContent>
         </Card>
 
         <div className="space-y-4">
           {criticalOpen.length ? (
-            <ItemList title={audience === "client" ? "Needed first: still to provide" : "Critical items outstanding"} icon={ShieldAlert} tone="text-destructive" items={criticalOpen} empty="" hrefFor={hrefFor} />
+            <ItemList title={audience === "client" ? "Critical: still to provide" : "Critical items outstanding"} icon={ShieldAlert} tone="text-danger" items={criticalOpen} empty="" hrefFor={hrefFor} />
           ) : null}
-          <ItemList title="Overdue" icon={Clock} tone="text-destructive" items={overdue} empty="Nothing overdue." hrefFor={hrefFor} />
+          <ItemList title="Overdue" icon={Clock} tone="text-danger" items={overdue} empty="Nothing overdue." hrefFor={hrefFor} />
           {audience === "team" ? (
-            <ItemList title="Awaiting review" icon={Hourglass} tone="text-info" items={awaiting} empty="Nothing waiting for review." hrefFor={hrefFor} />
+            <ItemList title="Awaiting review" icon={Hourglass} tone="text-review" items={awaiting} empty="Nothing waiting for review." hrefFor={hrefFor} />
           ) : null}
           <ItemList
             title={audience === "client" ? "Queries to respond to" : "Queried (with client)"}

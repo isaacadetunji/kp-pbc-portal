@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { AtSign, Lock, MessageSquare, Reply, Send, X } from "lucide-react";
+import { AtSign, Eye, Lock, MessageSquare, Reply, Send, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -21,6 +21,7 @@ export function CommentThread({
   refreshKey,
   sampleLineId,
   compact,
+  canPost = true,
 }: {
   itemId: string;
   userId: string;
@@ -30,6 +31,8 @@ export function CommentThread({
   /** When set, the thread is for one sample line; otherwise item-level only. */
   sampleLineId?: string;
   compact?: boolean;
+  /** False for read-only viewers (can see the engagement but are not on its team). */
+  canPost?: boolean;
 }) {
   const supabase = createClient();
   const [comments, setComments] = useState<Comment[]>([]);
@@ -117,18 +120,18 @@ export function CommentThread({
 
   function Bubble({ c }: { c: Comment }) {
     return (
-      <div className={cn("flex gap-3", c.is_internal && "rounded-lg bg-warning-soft/60 p-2")}>
+      <div className={cn("flex gap-3", c.is_internal && "rounded-lg border border-warning/15 bg-warning-soft/60 p-2.5")}>
         <span
           className={cn(
             "grid size-8 shrink-0 place-items-center rounded-full text-xs font-semibold",
-            isStaffAuthor(c.author_id) ? "bg-primary text-primary-foreground" : "bg-brand-accent text-white",
+            isStaffAuthor(c.author_id) ? "bg-primary text-primary-foreground" : "bg-client-soft text-client",
           )}
         >
           {initials(nameOf(c.author_id))}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="text-sm font-medium">{nameOf(c.author_id)}</span>
+            <span className="text-sm font-semibold">{nameOf(c.author_id)}</span>
             <span className="text-xs text-muted-foreground">{fmtDateTime(c.created_at)}</span>
             {c.is_internal ? (
               <Badge variant="warning">
@@ -137,7 +140,7 @@ export function CommentThread({
             ) : null}
             {c.edited_at ? <span className="text-xs text-muted-foreground">(edited)</span> : null}
           </div>
-          <p className="mt-1 text-sm whitespace-pre-wrap break-words">{c.body}</p>
+          <p className="mt-1 text-sm leading-relaxed whitespace-pre-wrap break-words text-foreground/90">{c.body}</p>
         </div>
       </div>
     );
@@ -169,15 +172,18 @@ export function CommentThread({
                   ))}
                 </ul>
               ) : null}
-              <button onClick={() => setReplyTo(root)} className="ml-11 flex items-center gap-1 text-xs text-primary hover:underline">
-                <Reply className="size-3" /> Reply
-              </button>
+              {canPost ? (
+                <button onClick={() => setReplyTo(root)} className="ml-11 flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+                  <Reply className="size-3" /> Reply
+                </button>
+              ) : null}
             </li>
           ))}
         </ul>
       )}
 
-      <form onSubmit={post} className="space-y-2 rounded-lg border bg-card p-3">
+      {canPost ? (
+      <form onSubmit={post} className="space-y-2 rounded-xl border bg-card p-3 shadow-xs focus-within:border-ring/60 focus-within:ring-[3px] focus-within:ring-ring/20">
         {replyTo ? (
           <div className="flex items-center justify-between rounded bg-muted px-2 py-1 text-xs">
             <span className="truncate">
@@ -228,6 +234,11 @@ export function CommentThread({
           </Button>
         </div>
       </form>
+      ) : (
+        <p className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
+          <Eye className="size-3.5 shrink-0" /> View only. You are not on this engagement team, so you can&apos;t comment.
+        </p>
+      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -8,8 +8,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { NotificationSettingsFields } from "@/components/notification-settings-fields";
+import { saveEngagementNotificationSettings } from "@/lib/actions/notification-settings";
+import { normaliseNotificationSettings } from "@/lib/checklist-constants";
 import { createClient } from "@/lib/supabase/client";
-import type { Engagement } from "@/lib/types";
+import type { Engagement, NotificationSettings } from "@/lib/types";
 import { friendlyError } from "@/lib/utils";
 
 export function EngagementSettings({ engagement, canManage, firmMaxMb }: { engagement: Engagement; canManage: boolean; firmMaxMb: number }) {
@@ -48,6 +51,7 @@ export function EngagementSettings({ engagement, canManage, firmMaxMb }: { engag
   }
 
   return (
+    <div className="space-y-6">
     <Card className="max-w-2xl">
       <CardHeader>
         <CardTitle>Engagement settings</CardTitle>
@@ -90,8 +94,8 @@ export function EngagementSettings({ engagement, canManage, firmMaxMb }: { engag
             </fieldset>
             <label className="flex items-start justify-between gap-4 rounded-lg border p-3">
               <span>
-                <span className="block text-sm font-medium">Final acceptance by lead only</span>
-                <span className="block text-xs text-muted-foreground">When on, managers can review and query but only the engagement lead can accept items or mark them N/A.</span>
+                <span className="block text-sm font-medium">Final acceptance by partner / team lead only</span>
+                <span className="block text-xs text-muted-foreground">When on, managers can review and query but only a partner or the team lead can accept items or mark them N/A.</span>
               </span>
               <Switch checked={leadOnly} onCheckedChange={setLeadOnly} />
             </label>
@@ -99,9 +103,74 @@ export function EngagementSettings({ engagement, canManage, firmMaxMb }: { engag
               <Label htmlFor="es-max">Maximum upload size (MB)</Label>
               <Input id="es-max" type="number" min={1} max={2048} value={maxMb} onChange={(e) => setMaxMb(e.target.value)} placeholder={`Firm default: ${firmMaxMb} MB`} />
             </div>
-            {canManage ? <Button type="submit">Save settings</Button> : <p className="text-sm text-muted-foreground">Only the lead or a manager can change these settings.</p>}
+            {canManage ? <Button type="submit">Save settings</Button> : <p className="text-sm text-muted-foreground">Only a partner, the team lead or a manager can change these settings.</p>}
           </fieldset>
         </form>
+      </CardContent>
+    </Card>
+    <NotificationsCard engagementId={engagement.id} canManage={canManage} />
+    </div>
+  );
+}
+
+/** Notifications & reminders for this engagement (team only; editable by the lead / managers). */
+function NotificationsCard({ engagementId, canManage }: { engagementId: string; canManage: boolean }) {
+  const router = useRouter();
+  const [value, setValue] = useState<NotificationSettings | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    createClient()
+      .from("engagement_notification_settings")
+      .select("*")
+      .eq("engagement_id", engagementId)
+      .maybeSingle()
+      .then(({ data }: { data: Partial<NotificationSettings> | null }) => {
+        if (!live) return;
+        setMissing(!data);
+        setValue(normaliseNotificationSettings(data));
+      });
+    return () => {
+      live = false;
+    };
+  }, [engagementId]);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    if (!value) return;
+    setBusy(true);
+    const res = await saveEngagementNotificationSettings(engagementId, value);
+    setBusy(false);
+    if (!res.ok) return toast.error(res.error);
+    setMissing(false);
+    toast.success("Notification settings saved");
+    router.refresh();
+  }
+
+  return (
+    <Card className="max-w-2xl">
+      <CardHeader>
+        <CardTitle>Notifications &amp; reminders</CardTitle>
+        <CardDescription>
+          E-mails for this engagement. In-app notifications are always on. Times are Lagos time.
+          {missing ? " Showing the firm defaults; save to keep them for this engagement." : ""}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {value ? (
+          <form onSubmit={save} className="space-y-5">
+            <NotificationSettingsFields value={value} onChange={setValue} disabled={!canManage || busy} idPrefix="eng-ns" />
+            {canManage ? (
+              <Button type="submit" disabled={busy}>Save notification settings</Button>
+            ) : (
+              <p className="text-sm text-muted-foreground">Only a partner, the team lead or a manager can change these settings.</p>
+            )}
+          </form>
+        ) : (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        )}
       </CardContent>
     </Card>
   );

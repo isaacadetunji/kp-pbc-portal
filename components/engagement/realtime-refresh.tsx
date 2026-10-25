@@ -22,6 +22,8 @@ export function RealtimeRefresh({ engagementId }: { engagementId: string }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "request_item_files", filter }, bump)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "comments", filter }, bump)
       .on("postgres_changes", { event: "*", schema: "public", table: "sample_lines", filter }, bump)
+      .on("postgres_changes", { event: "*", schema: "public", table: "request_item_assignees", filter }, bump)
+      .on("postgres_changes", { event: "*", schema: "public", table: "engagement_team", filter }, bump)
       .on("postgres_changes", { event: "*", schema: "public", table: "engagement_documents", filter }, bump)
       .on("postgres_changes", { event: "*", schema: "public", table: "engagement_events", filter }, bump)
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "engagements", filter: `id=eq.${engagementId}` }, bump)

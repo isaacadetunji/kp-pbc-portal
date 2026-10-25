@@ -31,6 +31,7 @@ export function SampleSchedulePanel({
   engagementStatus,
   upload,
   canManageSchedule,
+  canComment = true,
 }: {
   itemId: string;
   audience: "team" | "client";
@@ -39,6 +40,8 @@ export function SampleSchedulePanel({
   engagementStatus: EngagementStatus;
   upload: { allowedExtensions: string[]; maxFileMb: number };
   canManageSchedule: boolean;
+  /** False for read-only viewers of the engagement */
+  canComment?: boolean;
 }) {
   const supabase = createClient();
   const [schedule, setSchedule] = useState<Schedule | null>(null);
@@ -383,7 +386,7 @@ export function SampleSchedulePanel({
                           </div>
                           <div>
                             <div className="mb-2 text-xs font-semibold text-muted-foreground uppercase">Conversation on line {l.line_no}</div>
-                            <CommentThread itemId={itemId} userId={userId} audience={audience} team={team} sampleLineId={l.id} compact />
+                            <CommentThread itemId={itemId} userId={userId} audience={audience} team={team} sampleLineId={l.id} compact canPost={canComment} />
                           </div>
                         </div>
                       </td>

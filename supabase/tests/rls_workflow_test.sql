@@ -155,9 +155,13 @@ select pg_temp.expect_error($$insert into public.request_item_files (request_ite
 select pg_temp.act_as('lead@kp.test');
 select pg_temp.expect_error($$update public.request_items set status = 'accepted' where code = 'GEN-01'$$, 'permission denied',
   'even the lead cannot set status directly');
-update public.request_items set due_date = '2026-10-15', assignee_id = (select id from public.profiles where email = 'member@kp.test')
+update public.request_items set due_date = '2026-10-15'
 where engagement_id = current_setting('test.eng')::uuid and code = 'GEN-01';
-select pg_temp.assert((select due_date = '2026-10-15' from public.request_items where code = 'GEN-01'), 'lead can set due date/assignee');
+select public.set_request_item_assignees((select id from public.request_items where code = 'GEN-01'), 'firm',
+  array[(select id from public.profiles where email = 'member@kp.test')]);
+select pg_temp.assert((select due_date = '2026-10-15' from public.request_items where code = 'GEN-01')
+  and (select count(*) = 1 from public.request_item_assignees a join public.request_items i on i.id = a.request_item_id
+       where i.code = 'GEN-01' and a.side = 'firm'), 'lead can set due date/assignee');
 
 select pg_temp.act_as('member@kp.test');
 update public.request_items set title = 'member edit' where code = 'GEN-02';
@@ -259,12 +263,14 @@ select pg_temp.expect_error($$select public.waive_item((select id from public.re
   'reason is required', 'waiver requires a reason');
 select public.waive_item((select id from public.request_items where code='GEN-09'), 'Continuing client — no predecessor auditor');
 
--- acceptance gate ----------------------------------------------------------------------------------------------------
-select public.transition_engagement(current_setting('test.eng')::uuid, 'acceptance_review');
-select pg_temp.expect_error($$select public.record_acceptance_decision(current_setting('test.eng')::uuid, 'go', 'All good')$$,
-  'outstanding', 'GO blocked while critical items are outstanding');
+-- critical gate (Pre-execution -> Execution) -------------------------------------------------------------------------
 select pg_temp.expect_error($$select public.transition_engagement(current_setting('test.eng')::uuid, 'in_progress')$$,
-  'cannot move', 'cannot jump to in_progress from acceptance_review');
+  'critical item', 'Execution blocked while critical items are outstanding');
+select pg_temp.expect_error($$select public.transition_engagement(current_setting('test.eng')::uuid, 'acceptance_review')$$,
+  'cannot move', 'acceptance review is no longer part of the flow');
+select pg_temp.act_as('member@kp.test');
+select pg_temp.expect_error($$select public.transition_engagement(current_setting('test.eng')::uuid, 'in_progress')$$,
+  'only a partner, the team lead or a manager', 'team member cannot move the stage');
 
 -- satisfy remaining critical items (superuser shortcut for the test)
 select pg_temp.as_super();
@@ -273,14 +279,13 @@ update public.request_items set status = 'accepted'
 where engagement_id = current_setting('test.eng')::uuid and is_critical and not is_waived and status <> 'accepted';
 select set_config('app.workflow', '', false);
 
-select pg_temp.act_as('lead@kp.test');
-select pg_temp.expect_error($$select public.record_acceptance_decision(current_setting('test.eng')::uuid, 'go', '')$$,
-  'note is required', 'decision note mandatory');
-select public.record_acceptance_decision(current_setting('test.eng')::uuid, 'go', 'Independence confirmed; KYC complete.');
-select pg_temp.assert((select status = 'accepted' from public.engagements where id = current_setting('test.eng')::uuid), 'GO -> accepted');
+select pg_temp.act_as('manager@kp.test');
 select public.transition_engagement(current_setting('test.eng')::uuid, 'in_progress');
 select pg_temp.assert((select status = 'in_progress' and fieldwork_started_at is not null from public.engagements
-  where id = current_setting('test.eng')::uuid), 'fieldwork started after gate');
+  where id = current_setting('test.eng')::uuid), 'manager moved to Execution once the gate passed (no acceptance decision needed)');
+select pg_temp.assert((select count(*) = 0 from public.acceptance_decisions where engagement_id = current_setting('test.eng')::uuid),
+  'no acceptance decision was recorded');
+select pg_temp.act_as('lead@kp.test');
 
 -- dashboards --------------------------------------------------------------------------------------------------------------
 select pg_temp.assert((select pct_critical = 100 and na_items = 1 and accepted_items >= 1
@@ -300,6 +305,8 @@ select pg_temp.assert((select title <> 'lead edit' from public.master_checklist_
 select pg_temp.act_as('admin@kp.test');
 update public.master_checklist_items set guidance = 'Updated guidance: include all amendments.' where code = 'GEN-03';
 select pg_temp.assert((select revision = 2 from public.master_checklist_items where code = 'GEN-03'), 'master edit bumps revision');
+select pg_temp.assert((select count(*) > 0 from public.request_items), 'admin sees request items (view_all_engagements is on by default for admins)');
+select pg_temp.act_as('lead@kp.test');
 select pg_temp.assert((select guidance not like 'Updated%' from public.request_items
   where engagement_id = current_setting('test.eng')::uuid and code = 'GEN-03'), 'existing engagement NOT changed by master edit');
 select pg_temp.assert((select count(*) = 1 from public.v_master_updates where engagement_id = current_setting('test.eng')::uuid),
@@ -319,15 +326,14 @@ select public.delete_request_item((select id from public.request_items where tit
 select pg_temp.expect_error($$select public.delete_request_item((select id from public.request_items where code = 'GEN-01'))$$,
   'has uploaded files', 'cannot delete item that has files');
 
--- audit
-select pg_temp.act_as('admin@kp.test');
+-- audit (read by the Super admin only; see Phase 1.3 below for the RLS checks)
+select pg_temp.as_super();
 select pg_temp.assert((select count(*) > 0 from public.audit_log where action = 'request_item.status_changed'), 'status changes audited');
 select pg_temp.assert((select count(*) > 0 from public.audit_log where action = 'request_item.waived'), 'waiver audited');
 select pg_temp.assert((select count(*) > 0 from public.audit_log where action = 'file.submitted'), 'file submission audited');
-select pg_temp.assert((select count(*) = 1 from public.audit_log where action = 'acceptance_decision.insert'), 'decision audited');
-select pg_temp.as_super();
+select pg_temp.assert((select count(*) > 0 from public.audit_log where action = 'request_item_assignee.insert'), 'assignment audited');
 select pg_temp.expect_error($$delete from public.audit_log$$, 'append-only', 'audit log is append-only');
-select pg_temp.assert((select count(*) >= 4 from public.status_history
+select pg_temp.assert((select count(*) >= 3 from public.status_history
   where entity_type = 'engagement' and engagement_id = current_setting('test.eng')::uuid), 'engagement status history recorded');
 
 -- =============================================================================
@@ -620,7 +626,7 @@ select pg_temp.act_as('evil@other.test');
 select pg_temp.assert((select count(*) = 0 from public.engagement_documents), 'other client sees no documents');
 select pg_temp.expect_error($$select * from public.begin_document_upload(current_setting('test.eng')::uuid, 'x.pdf', 'application/pdf', 10)$$,
   'not permitted', 'other client cannot upload documents');
-select pg_temp.act_as('admin@kp.test');
+select pg_temp.as_super();
 select pg_temp.assert((select count(*) >= 2 from public.audit_log where entity_type = 'engagement_document')
   and (select count(*) >= 3 from public.audit_log where entity_type = 'engagement_event'), 'documents and events are audited');
 
@@ -641,3 +647,659 @@ select pg_temp.as_super();
 select pg_temp.expect_error($$insert into public.sample_schedules (request_item_id, engagement_id, columns)
   select id, engagement_id, array(select 'c' || g from generate_series(1, 51) g) from public.request_items where code = 'GEN-05' limit 1$$,
   'check constraint', 'table constraint caps columns at 50');
+
+-- =============================================================================
+-- 0008 (Agent A): role permissions, engagement visibility, team roles,
+-- request assignment & locking, stages, engagement codes
+-- =============================================================================
+select pg_temp.as_super();
+insert into auth.users (email, raw_app_meta_data, raw_user_meta_data) values
+  ('partner@kp.test', '{"app_role":"staff"}', '{"full_name":"Pat Partner"}'),
+  ('junior@kp.test',  '{"app_role":"staff"}', '{"full_name":"Jide Junior"}');
+-- user id by email, readable from any test role (profiles RLS hides other users from clients)
+create or replace function pg_temp.uid(p_email text) returns uuid language sql security definer as $$
+  select id from auth.users where email = p_email
+$$;
+grant execute on function pg_temp.uid(text) to authenticated;
+
+-- permissions matrix & audit -----------------------------------------------------
+select pg_temp.act_as('admin@kp.test');
+select pg_temp.assert((select count(*) >= 1 from public.engagements), 'admin sees every engagement by default (view_all_engagements is on for admins)');
+select pg_temp.assert((select count(*) = 0 from public.audit_log), 'admin cannot read the audit log');
+select pg_temp.assert(not public.has_app_permission('manage_users') and not public.has_app_permission('manage_clients')
+  and public.has_app_permission('manage_checklist') and public.has_app_permission('create_engagements')
+  and public.has_app_permission('view_all_engagements'),
+  'admin defaults: master checklist, create engagements and view all engagements');
+update public.app_settings set value = jsonb_set(value, '{admin,view_all_engagements}', 'false') where key = 'role_permissions';
+select pg_temp.assert((select count(*) >= 1 from public.engagements), 'admin cannot change its own permissions (settings are Super admin only, so view-all stays on)');
+select pg_temp.expect_error($$insert into public.engagement_types (code, name, code_prefix) values ('ZZ', 'Nope', 'ZZ')$$,
+  'row-level security', 'admin cannot add engagement types');
+select pg_temp.act_as('super@kp.test');
+select pg_temp.assert((select count(*) > 0 from public.audit_log), 'Super admin reads the audit log');
+update public.app_settings set value = jsonb_set(value, '{admin,view_all_engagements}', 'true') where key = 'role_permissions';
+select pg_temp.act_as('admin@kp.test');
+select pg_temp.assert((select count(*) >= 4 from public.engagements) and (select count(*) > 0 from public.request_items),
+  'Super admin switched on view_all_engagements: admin sees every engagement');
+select pg_temp.assert(not public.can_manage_engagement(current_setting('test.eng')::uuid),
+  'seeing every engagement does not make the admin a manager of it');
+select pg_temp.expect_error($$insert into public.engagement_events (engagement_id, title, kind, starts_on)
+  values (current_setting('test.eng')::uuid, 'Viewer event', 'meeting', '2028-01-01')$$, 'row-level security',
+  'a viewer who is not on the team is read-only (no events)');
+select pg_temp.expect_error($$insert into public.comments (request_item_id, author_id, body)
+  values ((select id from public.request_items where engagement_id = current_setting('test.eng')::uuid and code = 'GEN-02'), auth.uid(), 'hi')$$,
+  'row-level security', 'a viewer who is not on the team cannot comment');
+select pg_temp.as_super();
+update public.app_settings set value = jsonb_set(value, '{admin,view_all_engagements}', 'false') where key = 'role_permissions';
+update public.app_settings set value = jsonb_set(value, '{staff,create_engagements}', 'false') where key = 'role_permissions';
+select pg_temp.act_as('member@kp.test');
+select pg_temp.expect_error($$select public.create_engagement('11111111-1111-1111-1111-111111111111',
+  (select id from public.engagement_types where code = 'AD'), 'No', null, '2027-12-31',
+  (select id from public.profiles where email = 'lead@kp.test'), '{}'::uuid[])$$,
+  'permission to create', 'staff without create_engagements cannot create an engagement');
+select pg_temp.as_super();
+update public.app_settings set value = jsonb_set(value, '{staff,create_engagements}', 'true') where key = 'role_permissions';
+
+-- creator visibility: the creator is NOT added to the team ----------------------
+select pg_temp.act_as('admin@kp.test');
+select set_config('test.a_eng', public.create_engagement(
+  '11111111-1111-1111-1111-111111111111', (select id from public.engagement_types where code = 'DD'),
+  'Due diligence 2028', null, '2028-06-30', (select id from public.profiles where email = 'lead@kp.test'),
+  array(select id from public.master_checklist_items where code in ('GEN-01', 'GEN-02', 'FST-01')), null,
+  jsonb_build_array(
+    jsonb_build_object('user_id', (select id from public.profiles where email = 'partner@kp.test'), 'team_role', 'partner'),
+    jsonb_build_object('user_id', (select id from public.profiles where email = 'manager@kp.test'), 'team_role', 'manager'),
+    jsonb_build_object('user_id', (select id from public.profiles where email = 'member@kp.test'), 'team_role', 'member'),
+    jsonb_build_object('user_id', (select id from public.profiles where email = 'junior@kp.test'), 'team_role', 'member')))::text, false);
+select pg_temp.assert((select count(*) = 1 from public.engagements), 'creator sees the engagement they created (only that one)');
+select pg_temp.assert((select count(*) = 0 from public.engagement_team where user_id = auth.uid())
+  and (select count(*) = 5 from public.engagement_team where engagement_id = current_setting('test.a_eng')::uuid),
+  'the creator is not added to the team; partner, lead, manager and members are');
+select pg_temp.assert((select lead_id = (select id from public.profiles where email = 'lead@kp.test') from public.engagements
+  where id = current_setting('test.a_eng')::uuid), 'chosen team lead recorded on the engagement');
+select pg_temp.expect_error($$select public.issue_request_list(current_setting('test.a_eng')::uuid)$$, 'not permitted',
+  'the creator (not on the team) cannot release the list');
+select pg_temp.act_as('outsider@kp.test');
+select pg_temp.assert((select count(*) = 0 from public.engagements where id = current_setting('test.a_eng')::uuid),
+  'staff outside the team do not see it');
+select pg_temp.expect_error($$select public.create_engagement('11111111-1111-1111-1111-111111111111',
+  (select id from public.engagement_types where code = 'AD'), 'No lead', null, '2027-12-31', null, '{}'::uuid[])$$,
+  'choose the team lead', 'a team lead is required');
+select pg_temp.expect_error($$select public.create_engagement('11111111-1111-1111-1111-111111111111',
+  (select id from public.engagement_types where code = 'AD'), 'Two leads', null, '2027-12-31',
+  (select id from public.profiles where email = 'lead@kp.test'), '{}'::uuid[], null,
+  jsonb_build_array(jsonb_build_object('user_id', auth.uid(), 'team_role', 'lead')))$$,
+  'team roles must be', 'only one team lead can be chosen');
+
+-- client contacts: manage_clients or the engagement's managers --------------------
+select pg_temp.expect_error($$insert into public.client_contacts (client_id, full_name, email)
+  values ('11111111-1111-1111-1111-111111111111', 'Nope', 'nope@client.test')$$, 'row-level security',
+  'staff without manage_clients cannot add client contacts');
+select pg_temp.act_as('manager@kp.test');
+insert into public.client_contacts (client_id, full_name, email) values ('11111111-1111-1111-1111-111111111111', 'New Contact', 'new@client.test');
+select pg_temp.assert((select count(*) = 1 from public.client_contacts where email = 'new@client.test'),
+  'an engagement manager can add a contact of that client (invite flow)');
+
+-- team roles ----------------------------------------------------------------------
+select pg_temp.act_as('lead@kp.test');
+select pg_temp.expect_error($$insert into public.engagement_team (engagement_id, user_id, team_role)
+  values (current_setting('test.a_eng')::uuid, (select id from public.profiles where email = 'outsider@kp.test'), 'lead')$$,
+  'row-level security', 'a second lead cannot be added directly');
+select pg_temp.expect_error($$insert into public.engagement_team (engagement_id, user_id, team_role)
+  values (current_setting('test.a_eng')::uuid, (select id from public.profiles where email = 'cfo@client.test'), 'member')$$,
+  'only active firm users', 'client users cannot join the engagement team');
+select pg_temp.as_super();
+select pg_temp.expect_error($$insert into public.engagement_team (engagement_id, user_id, team_role)
+  values (current_setting('test.a_eng')::uuid, (select id from public.profiles where email = 'outsider@kp.test'), 'lead')$$,
+  'engagement_team_one_lead_uq', 'exactly one lead per engagement (unique index)');
+select pg_temp.act_as('manager@kp.test');
+select pg_temp.expect_error($$insert into public.engagement_team (engagement_id, user_id, team_role)
+  values (current_setting('test.a_eng')::uuid, (select id from public.profiles where email = 'outsider@kp.test'), 'partner')$$,
+  'row-level security', 'a manager cannot add a partner');
+delete from public.engagement_team where engagement_id = current_setting('test.a_eng')::uuid
+  and user_id = (select id from public.profiles where email = 'partner@kp.test');
+select pg_temp.assert((select count(*) = 1 from public.engagement_team where engagement_id = current_setting('test.a_eng')::uuid
+  and team_role::text = 'partner'), 'a manager cannot remove a partner');
+select pg_temp.act_as('member@kp.test');
+select pg_temp.expect_error($$select public.set_engagement_lead(current_setting('test.a_eng')::uuid, auth.uid())$$,
+  'only a partner, the team lead or a manager', 'a team member cannot change the lead');
+select pg_temp.act_as('manager@kp.test');
+select public.set_engagement_lead(current_setting('test.a_eng')::uuid, (select id from public.profiles where email = 'member@kp.test'));
+select pg_temp.assert((select team_role::text = 'lead' from public.engagement_team where engagement_id = current_setting('test.a_eng')::uuid
+    and user_id = (select id from public.profiles where email = 'member@kp.test'))
+  and (select team_role::text = 'manager' from public.engagement_team where engagement_id = current_setting('test.a_eng')::uuid
+    and user_id = (select id from public.profiles where email = 'lead@kp.test'))
+  and (select lead_id = (select id from public.profiles where email = 'member@kp.test') from public.engagements
+    where id = current_setting('test.a_eng')::uuid),
+  'manager changed the lead: previous lead became a manager, lead_id kept in sync');
+select pg_temp.assert((select count(*) = 1 from public.engagement_team where engagement_id = current_setting('test.a_eng')::uuid
+  and team_role = 'lead'), 'still exactly one lead');
+select pg_temp.act_as('member@kp.test');
+select pg_temp.assert((select count(*) = 1 from public.notifications where type = 'lead_assigned'), 'new lead notified');
+select public.set_engagement_lead(current_setting('test.a_eng')::uuid, (select id from public.profiles where email = 'lead@kp.test'));
+select pg_temp.act_as('lead@kp.test');
+update public.engagement_team set team_role = 'member' where engagement_id = current_setting('test.a_eng')::uuid
+  and user_id = (select id from public.profiles where email = 'member@kp.test');
+select pg_temp.assert((select team_role::text = 'member' from public.engagement_team where engagement_id = current_setting('test.a_eng')::uuid
+  and user_id = (select id from public.profiles where email = 'member@kp.test')), 'lead handed back; the lead changes a manager back to member');
+select pg_temp.act_as('partner@kp.test');
+select pg_temp.assert(public.is_engagement_lead(current_setting('test.a_eng')::uuid) and public.can_accept_items(current_setting('test.a_eng')::uuid),
+  'partner has the lead''s powers');
+select public.issue_request_list(current_setting('test.a_eng')::uuid);
+select pg_temp.assert((select status = 'pre_engagement' from public.engagements where id = current_setting('test.a_eng')::uuid),
+  'partner approved and released the list');
+select public.waive_item((select id from public.request_items where engagement_id = current_setting('test.a_eng')::uuid and code = 'GEN-02'),
+  'Obtained directly from CAC');
+select pg_temp.assert((select is_waived from public.request_items where engagement_id = current_setting('test.a_eng')::uuid and code = 'GEN-02'),
+  'partner waived a critical item');
+
+-- assignment & locking ------------------------------------------------------------
+select pg_temp.act_as('lead@kp.test');
+select set_config('test.a_lock', public.add_request_item(current_setting('test.a_eng')::uuid,
+  (select folder_id from public.request_items where engagement_id = current_setting('test.a_eng')::uuid and code = 'GEN-01'),
+  'Directors'' remuneration schedule', 'Confidential', false, null, 'normal', null, '{}', true,
+  array[(select id from public.profiles where email = 'member@kp.test')],
+  array[(select id from public.profiles where email = 'cfo@client.test')])::text, false);
+select set_config('test.a_open', public.add_request_item(current_setting('test.a_eng')::uuid,
+  (select folder_id from public.request_items where engagement_id = current_setting('test.a_eng')::uuid and code = 'GEN-01'),
+  'Board minutes', null)::text, false);
+select pg_temp.assert((select is_locked and created_by = auth.uid() from public.request_items where id = current_setting('test.a_lock')::uuid)
+  and (select count(*) = 2 from public.request_item_assignees where request_item_id = current_setting('test.a_lock')::uuid),
+  'locked request created with a firm and a client assignee');
+select pg_temp.assert((select bool_and(side = case when user_id = (select id from public.profiles where email = 'cfo@client.test') then 'client' else 'firm' end::public.document_side)
+  from public.request_item_assignees where request_item_id = current_setting('test.a_lock')::uuid), 'assignee side derived from the user''s role');
+
+select pg_temp.act_as('cfo@client.test');
+select pg_temp.assert((select count(*) = 1 from public.request_items where id = current_setting('test.a_lock')::uuid),
+  'client assignee sees the locked request');
+select pg_temp.assert((select count(*) = 1 from public.notifications where type = 'item_assigned' and request_item_id = current_setting('test.a_lock')::uuid),
+  'client assignee notified "Assigned to you"');
+select set_config('test.a_f', (select file_id::text from public.begin_upload(current_setting('test.a_lock')::uuid,
+  'Remuneration.pdf', 'application/pdf', 100)), false);
+select pg_temp.as_super();
+select public.complete_upload(current_setting('test.a_f')::uuid, (select id from auth.users where email = 'cfo@client.test'));
+select pg_temp.act_as('cfo@client.test');
+select public.submit_item(current_setting('test.a_lock')::uuid, 'Attached');
+insert into public.comments (request_item_id, author_id, body) values (current_setting('test.a_lock')::uuid, auth.uid(), 'Please keep confidential');
+
+select pg_temp.act_as('fc@client.test');
+select pg_temp.assert((select count(*) = 0 from public.request_items where id = current_setting('test.a_lock')::uuid)
+  and (select count(*) = 1 from public.request_items where id = current_setting('test.a_open')::uuid),
+  'another client user does not see the locked request (but sees unlocked ones)');
+select pg_temp.assert((select count(*) = 0 from public.request_item_files where request_item_id = current_setting('test.a_lock')::uuid)
+  and (select count(*) = 0 from public.comments where request_item_id = current_setting('test.a_lock')::uuid)
+  and (select count(*) = 0 from public.request_item_assignees where request_item_id = current_setting('test.a_lock')::uuid),
+  'files, comments and assignees of a locked request are hidden from other client users');
+select pg_temp.assert((select total_items from public.v_engagement_progress where engagement_id = current_setting('test.a_eng')::uuid) = 4,
+  'progress view excludes the locked request for other client users');
+select pg_temp.expect_error($$select * from public.begin_upload(current_setting('test.a_lock')::uuid, 'x.pdf', 'application/pdf', 10)$$,
+  'not permitted', 'another client user cannot upload to the locked request');
+select pg_temp.expect_error($$insert into public.comments (request_item_id, author_id, body) values (current_setting('test.a_lock')::uuid, auth.uid(), 'x')$$,
+  'row-level security', 'another client user cannot comment on the locked request');
+select pg_temp.act_as('cfo@client.test');
+select pg_temp.assert((select total_items from public.v_engagement_progress where engagement_id = current_setting('test.a_eng')::uuid) = 5,
+  'the client assignee''s progress includes it');
+
+select pg_temp.act_as('member@kp.test');
+select pg_temp.assert((select count(*) = 1 from public.request_items where id = current_setting('test.a_lock')::uuid)
+  and (select count(*) = 1 from public.request_item_files where request_item_id = current_setting('test.a_lock')::uuid),
+  'firm assignee sees the locked request and its files');
+select pg_temp.assert((select count(*) = 1 from public.notifications where type = 'item_submitted' and request_item_id = current_setting('test.a_lock')::uuid),
+  'firm assignee notified of the submission');
+select pg_temp.act_as('junior@kp.test');
+select pg_temp.assert((select count(*) = 0 from public.request_items where id = current_setting('test.a_lock')::uuid)
+  and (select count(*) = 0 from public.request_item_files where request_item_id = current_setting('test.a_lock')::uuid)
+  and (select count(*) = 0 from public.comments where request_item_id = current_setting('test.a_lock')::uuid)
+  and (select count(*) = 0 from public.status_history where entity_id = current_setting('test.a_lock')::uuid),
+  'a team member who is not assigned sees nothing of the locked request (item, files, comments, history)');
+select pg_temp.assert((select count(*) = 0 from public.notifications where request_item_id = current_setting('test.a_lock')::uuid),
+  'and gets no notifications about it');
+select pg_temp.expect_error($$select public.review_item(current_setting('test.a_lock')::uuid, 'start_review')$$,
+  'not permitted', 'a team member who is not assigned cannot review the locked request');
+select pg_temp.act_as('manager@kp.test');
+select pg_temp.assert((select count(*) = 1 from public.request_items where id = current_setting('test.a_lock')::uuid),
+  'managers see locked requests');
+select pg_temp.act_as('partner@kp.test');
+select pg_temp.assert((select count(*) = 1 from public.request_items where id = current_setting('test.a_lock')::uuid),
+  'partners see locked requests');
+select pg_temp.act_as('super@kp.test');
+select pg_temp.assert((select count(*) = 1 from public.request_items where id = current_setting('test.a_lock')::uuid),
+  'Super admin sees locked requests');
+select pg_temp.as_super();
+update public.app_settings set value = jsonb_set(value, '{admin,view_all_engagements}', 'true') where key = 'role_permissions';
+select pg_temp.act_as('admin@kp.test');
+select pg_temp.assert((select count(*) = 0 from public.request_items where id = current_setting('test.a_lock')::uuid)
+  and (select count(*) = 1 from public.request_items where id = current_setting('test.a_open')::uuid),
+  'view-all does not reveal locked requests');
+select pg_temp.as_super();
+update public.app_settings set value = jsonb_set(value, '{admin,view_all_engagements}', 'false') where key = 'role_permissions';
+
+-- reassignment rules
+select pg_temp.act_as('member@kp.test');
+select pg_temp.expect_error($$select public.set_request_item_assignees(current_setting('test.a_lock')::uuid, 'firm',
+  array[(select id from public.profiles where email = 'junior@kp.test')])$$, 'not permitted',
+  'on a locked request a firm assignee cannot change the assignees');
+select pg_temp.expect_error($$select public.set_request_item_lock(current_setting('test.a_lock')::uuid, false)$$, 'only a partner',
+  'a team member (not the creator) cannot unlock');
+select pg_temp.act_as('cfo@client.test');
+select pg_temp.expect_error($$select public.set_request_item_assignees(current_setting('test.a_lock')::uuid, 'client',
+  array[pg_temp.uid('fc@client.test')])$$, 'not permitted',
+  'on a locked request the client assignee cannot reassign');
+select pg_temp.expect_error($$update public.request_items set is_locked = false where id = current_setting('test.a_lock')::uuid$$,
+  'permission denied', 'nobody can unlock by a direct update');
+select pg_temp.expect_error($$insert into public.request_item_assignees (request_item_id, engagement_id, user_id, side)
+  values (current_setting('test.a_lock')::uuid, current_setting('test.a_eng')::uuid, auth.uid(), 'client')$$,
+  'permission denied', 'assignees cannot be inserted directly');
+
+select pg_temp.act_as('junior@kp.test');
+select pg_temp.assert(public.set_request_item_assignees(current_setting('test.a_open')::uuid, 'firm',
+  array[(select id from public.profiles where email = 'junior@kp.test'), (select id from public.profiles where email = 'manager@kp.test')]) = 2,
+  'on an unlocked request any team member can assign firm people');
+select pg_temp.expect_error($$select public.set_request_item_assignees(current_setting('test.a_open')::uuid, 'client',
+  array[(select id from public.profiles where email = 'cfo@client.test')])$$, 'not permitted',
+  'a team member without edit rights cannot assign client people');
+select pg_temp.expect_error($$select public.set_request_item_assignees(current_setting('test.a_open')::uuid, 'firm',
+  array[(select id from public.profiles where email = 'outsider@kp.test')])$$, 'members of the engagement team',
+  'only team members can be assigned on the firm side');
+select pg_temp.act_as('cfo@client.test');
+select pg_temp.assert(public.set_request_item_assignees(current_setting('test.a_open')::uuid, 'client',
+  array[pg_temp.uid('fc@client.test')]) = 1,
+  'on an unlocked request a client user can assign client colleagues');
+select pg_temp.expect_error($$select public.set_request_item_assignees(current_setting('test.a_open')::uuid, 'firm', '{}'::uuid[])$$,
+  'not permitted', 'a client user cannot change firm-side assignees');
+select pg_temp.expect_error($$select public.set_request_item_assignees(current_setting('test.a_open')::uuid, 'client',
+  array[pg_temp.uid('evil@other.test')])$$, 'client users with access',
+  'only client users with access can be assigned on the client side');
+select pg_temp.act_as('fc@client.test');
+select pg_temp.assert((select count(*) = 1 from public.notifications where type = 'item_assigned' and request_item_id = current_setting('test.a_open')::uuid),
+  'new client assignee notified');
+select pg_temp.assert((select count(*) = 1 from public.request_item_assignees where user_id = auth.uid()), '"Assigned to me" lists it');
+
+-- the lead locks it with no client assignee: invisible to every client user
+select pg_temp.act_as('manager@kp.test');
+select public.set_request_item_assignees(current_setting('test.a_open')::uuid, 'client', '{}'::uuid[]);
+select public.set_request_item_lock(current_setting('test.a_open')::uuid, true);
+select pg_temp.act_as('fc@client.test');
+select pg_temp.assert((select count(*) = 0 from public.request_items where id = current_setting('test.a_open')::uuid)
+  and (select count(*) = 0 from public.notifications where request_item_id = current_setting('test.a_open')::uuid),
+  'a locked request with no client assignee is invisible to client users (and so are notifications about it)');
+select pg_temp.act_as('cfo@client.test');
+select pg_temp.assert((select count(*) = 0 from public.request_items where id = current_setting('test.a_open')::uuid),
+  'invisible to the other client user as well');
+select pg_temp.act_as('junior@kp.test');
+select pg_temp.assert((select count(*) = 1 from public.request_items where id = current_setting('test.a_open')::uuid),
+  'its firm assignee still sees it');
+select pg_temp.act_as('member@kp.test');
+select pg_temp.assert((select count(*) = 0 from public.request_items where id = current_setting('test.a_open')::uuid),
+  'a team member who is not assigned no longer sees it once locked');
+select pg_temp.act_as('lead@kp.test');
+select public.set_request_item_lock(current_setting('test.a_open')::uuid, false);
+select pg_temp.act_as('cfo@client.test');
+select pg_temp.assert((select count(*) = 1 from public.request_items where id = current_setting('test.a_open')::uuid), 'unlocked again: visible to all client users');
+
+-- stages ---------------------------------------------------------------------------
+select pg_temp.act_as('junior@kp.test');
+select pg_temp.expect_error($$select public.transition_engagement(current_setting('test.a_eng')::uuid, 'in_progress')$$,
+  'only a partner', 'a team member cannot move to Execution');
+select pg_temp.act_as('manager@kp.test');
+select pg_temp.expect_error($$select public.transition_engagement(current_setting('test.a_eng')::uuid, 'in_progress')$$,
+  'critical item', 'Execution blocked while a critical item is outstanding');
+select pg_temp.as_super();
+select set_config('app.workflow', 'on', false);
+update public.request_items set status = 'accepted' where engagement_id = current_setting('test.a_eng')::uuid and code = 'GEN-01';
+select set_config('app.workflow', '', false);
+select pg_temp.act_as('manager@kp.test');
+select public.transition_engagement(current_setting('test.a_eng')::uuid, 'in_progress');
+select pg_temp.assert((select status = 'in_progress' from public.engagements where id = current_setting('test.a_eng')::uuid),
+  'critical items accepted or waived: manager moved to Execution');
+select pg_temp.expect_error($$select public.transition_engagement(current_setting('test.a_eng')::uuid, 'completed')$$,
+  'only a partner or the team lead', 'a manager cannot complete while items are open');
+select pg_temp.act_as('lead@kp.test');
+select pg_temp.expect_error($$select public.transition_engagement(current_setting('test.a_eng')::uuid, 'completed', '  ')$$,
+  'reason is required', 'completing with open items needs a reason');
+select pg_temp.act_as('partner@kp.test');
+select public.transition_engagement(current_setting('test.a_eng')::uuid, 'completed', 'Scope reduced; remaining items not needed');
+select pg_temp.assert((select status = 'completed' and completed_at is not null from public.engagements where id = current_setting('test.a_eng')::uuid)
+  and (select note like 'Completed with % open item(s). Reason: Scope reduced%' from public.status_history
+       where entity_type = 'engagement' and entity_id = current_setting('test.a_eng')::uuid and to_status = 'completed'),
+  'partner completed with a recorded reason');
+select pg_temp.as_super();
+select pg_temp.assert((select count(*) = 1 from public.audit_log where entity_type = 'engagement' and action = 'engagement.status_changed'
+  and entity_id = current_setting('test.a_eng') and after ->> 'status' = 'completed'), 'forced completion audited');
+select pg_temp.act_as('partner@kp.test');
+select public.transition_engagement(current_setting('test.a_eng')::uuid, 'in_progress');
+select pg_temp.assert((select status = 'in_progress' from public.engagements where id = current_setting('test.a_eng')::uuid), 'partner reopened the engagement');
+select pg_temp.as_super();
+select set_config('app.workflow', 'on', false);
+update public.request_items set status = 'not_applicable' where engagement_id = current_setting('test.a_eng')::uuid and not is_critical;
+update public.request_items set status = 'accepted' where engagement_id = current_setting('test.a_eng')::uuid and is_critical and not is_waived;
+select set_config('app.workflow', '', false);
+select pg_temp.act_as('manager@kp.test');
+select public.transition_engagement(current_setting('test.a_eng')::uuid, 'completed');
+select pg_temp.assert((select status = 'completed' from public.engagements where id = current_setting('test.a_eng')::uuid),
+  'every item accepted, waived or N/A: a manager completes without a reason');
+select pg_temp.act_as('lead@kp.test');
+select pg_temp.expect_error($$select public.transition_engagement(current_setting('test.eng4')::uuid, 'in_progress')$$,
+  'cannot move', 'a draft cannot jump to Execution');
+
+-- stage labels
+select pg_temp.assert(public.stage_label('in_progress') = 'Execution' and public.stage_label('acceptance_review') = 'Pre-execution',
+  'default stage labels (legacy acceptance states shown as Pre-execution)');
+select pg_temp.act_as('admin@kp.test');
+update public.app_settings set value = jsonb_set(value, '{in_progress}', '"Hacked"') where key = 'stage_labels';
+select pg_temp.act_as('super@kp.test');
+select pg_temp.assert(public.stage_label('in_progress') = 'Execution', 'admins cannot rename stages');
+update public.app_settings set value = jsonb_set(value, '{in_progress}', '"Fieldwork"') where key = 'stage_labels';
+select pg_temp.assert(public.stage_label('in_progress') = 'Fieldwork', 'Super admin renames a stage');
+update public.app_settings set value = public.default_stage_labels() where key = 'stage_labels';
+
+-- engagement types and codes -------------------------------------------------------
+insert into public.engagement_types (code, name, code_prefix, sort_order) values ('IA', 'Internal Audit', 'IAU', 50);
+update public.app_settings set value = to_jsonb('{PREFIX}{YY}-{SEQ3}'::text) where key = 'engagement_code_format';
+select pg_temp.act_as('lead@kp.test');
+select set_config('test.a_code1', public.create_engagement('11111111-1111-1111-1111-111111111111',
+  (select id from public.engagement_types where code = 'IA'), 'Internal audit', null, '2026-12-31', auth.uid(), '{}'::uuid[])::text, false);
+select pg_temp.assert((select code = 'IAU26-001' from public.engagements where id = current_setting('test.a_code1')::uuid),
+  'new type with its own prefix; code follows the configured format');
+select pg_temp.as_super();
+update public.app_settings set value = to_jsonb('{PREFIX}-{SEQ5}'::text) where key = 'engagement_code_format';
+update public.engagement_types set is_active = false where code = 'IA';
+select pg_temp.act_as('lead@kp.test');
+select set_config('test.a_code2', public.create_engagement('11111111-1111-1111-1111-111111111111',
+  (select id from public.engagement_types where code = 'SA'), 'No year', null, '2026-12-31', auth.uid(), '{}'::uuid[])::text, false);
+select pg_temp.assert((select code = 'SA-00001' from public.engagements where id = current_setting('test.a_code2')::uuid),
+  'a format without a year uses its own sequence');
+select pg_temp.expect_error($$select public.create_engagement('11111111-1111-1111-1111-111111111111',
+  (select id from public.engagement_types where code = 'IA'), 'Inactive', null, '2026-12-31', auth.uid(), '{}'::uuid[])$$,
+  'inactive engagement type', 'deactivated types cannot be used for new engagements');
+select pg_temp.as_super();
+update public.app_settings set value = to_jsonb('{PREFIX}/{SEQ4}'::text) where key = 'engagement_code_format';
+select pg_temp.assert(not public.valid_engagement_code_format('{PREFIX}/{SEQ4}') and not public.valid_engagement_code_format('{PREFIX}-{YYYY}')
+  and public.valid_engagement_code_format('{PREFIX}-{YYYY}-{SEQ4}'), 'code formats are validated (safe characters, sequence required)');
+select pg_temp.act_as('lead@kp.test');
+select set_config('test.a_code3', public.create_engagement('11111111-1111-1111-1111-111111111111',
+  (select id from public.engagement_types where code = 'SA'), 'Fallback', null, '2029-12-31', auth.uid(), '{}'::uuid[])::text, false);
+select pg_temp.assert((select code ~ '^SA-2029-\d{4}$' from public.engagements where id = current_setting('test.a_code3')::uuid),
+  'an invalid format falls back to the default');
+select pg_temp.assert((select code = 'SA-2026-0001' from public.engagements where id = current_setting('test.eng')::uuid),
+  'existing codes never change');
+select pg_temp.as_super();
+update public.app_settings set value = to_jsonb('{PREFIX}-{YYYY}-{SEQ4}'::text) where key = 'engagement_code_format';
+update public.engagement_types set is_active = true where code = 'IA';
+
+-- =============================================================================
+-- 0009 (Agent B): checklist taxonomy, file classes, priority rename, uploads
+-- without per-item types, notification settings, e-mail dispatch selection
+-- =============================================================================
+select pg_temp.as_super();
+
+-- priority rename -------------------------------------------------------------
+select pg_temp.assert((select array_agg(enumlabel::text order by enumsortorder) = array['low','normal','important','urgent']
+  from pg_enum where enumtypid = 'public.item_priority'::regtype), 'priorities are Low, Normal, Important, Urgent');
+select pg_temp.expect_error($$select 'high'::public.item_priority$$, 'invalid input value', 'the old priority "high" no longer exists');
+select pg_temp.assert((select count(*) = 0 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public' and p.prosrc ~ '''high''::(public\.)?item_priority'), 'no function still casts ''high''');
+select pg_temp.assert((select count(*) > 0 from public.master_checklist_items where default_priority = 'important')
+  and (select count(*) > 0 from public.request_items where priority = 'important'), 'existing high values became important');
+
+-- categories & default folders: permissions -------------------------------------
+select pg_temp.act_as('admin@kp.test');   -- admin: manage_checklist on by default
+insert into public.master_categories (code, name, sort_order) values ('TST', 'Test category', 500);
+update public.master_categories set name = 'Test category (renamed)', sort_order = 510 where code = 'TST';
+select pg_temp.assert((select name = 'Test category (renamed)' and sort_order = 510 from public.master_categories where code = 'TST'),
+  'admin with manage_checklist adds, renames and reorders a category');
+update public.master_categories set is_active = false where code = 'TST';
+select pg_temp.assert((select not is_active from public.master_categories where code = 'TST'), 'admin deactivates a category');
+select pg_temp.expect_error($$update public.master_categories set code = 'XXX' where code = 'TST'$$, 'permission denied',
+  'a category code cannot be changed once created');
+insert into public.master_folders (name, sort_order) values ('  19   Test   Folder ', 900);
+select pg_temp.assert((select count(*) = 1 from public.master_folders where name = '19 Test Folder'), 'admin adds a default folder (name tidied)');
+select pg_temp.expect_error($$insert into public.master_folders (name) values ('19 TEST FOLDER')$$, 'duplicate',
+  'folder names are unique (case-insensitive)');
+select pg_temp.assert((select count(*) = 18 from public.master_folders where name ~ '^(0[1-9]|1[0-8]) '), 'seeded default folders 01-18 exist');
+insert into public.master_checklist_items (code, category_id, title, default_folder, default_priority, is_critical)
+values ('TST-01', (select id from public.master_categories where code = 'TST'), 'Test item', '19 Test Folder', 'normal', true);
+insert into public.master_checklist_items (code, category_id, title, default_folder)
+values ('TST-02', (select id from public.master_categories where code = 'TST'), 'Second test item', '20 Brand New Folder');
+select pg_temp.assert((select count(*) = 1 from public.master_folders where name = '20 Brand New Folder'),
+  'saving a master item with a new folder name adds it to the managed list');
+select public.rename_master_folder((select id from public.master_folders where name = '20 Brand New Folder'), '20 Renamed Folder');
+select pg_temp.assert((select default_folder = '20 Renamed Folder' and revision = 1 from public.master_checklist_items where code = 'TST-02'),
+  'renaming a folder carries to master items without a new revision');
+select pg_temp.act_as('super@kp.test');
+select pg_temp.assert((select count(*) >= 2 from public.audit_log where entity_type in ('master_category', 'master_folder')),
+  'category and folder changes are audited');
+
+select pg_temp.as_super();
+update public.app_settings set value = jsonb_set(value, '{admin,manage_checklist}', 'false') where key = 'role_permissions';
+select pg_temp.act_as('admin@kp.test');
+select pg_temp.expect_error($$insert into public.master_categories (code, name) values ('TS2', 'Nope')$$, 'row-level security',
+  'admin WITHOUT manage_checklist cannot add a category');
+update public.master_categories set name = 'hacked' where code = 'TST';
+select pg_temp.expect_error($$insert into public.master_folders (name) values ('99 Nope')$$, 'row-level security',
+  'admin WITHOUT manage_checklist cannot add a folder');
+select pg_temp.expect_error($$select public.rename_master_folder((select id from public.master_folders where name = '19 Test Folder'), 'x')$$,
+  'not permitted', 'admin WITHOUT manage_checklist cannot rename a folder');
+update public.master_checklist_items set title = 'hacked' where code = 'TST-01';
+select pg_temp.as_super();
+select pg_temp.assert((select name <> 'hacked' from public.master_categories where code = 'TST')
+  and (select title <> 'hacked' from public.master_checklist_items where code = 'TST-01'),
+  'admin WITHOUT manage_checklist cannot rename categories or edit master items');
+update public.app_settings set value = jsonb_set(value, '{admin,manage_checklist}', 'true') where key = 'role_permissions';
+update public.app_settings set value = jsonb_set(value, '{staff,manage_checklist}', 'true') where key = 'role_permissions';
+select pg_temp.act_as('member@kp.test');
+insert into public.master_folders (name) values ('21 Staff Folder');
+select pg_temp.assert((select count(*) = 1 from public.master_folders where name = '21 Staff Folder'),
+  'staff granted manage_checklist can add a folder');
+select pg_temp.as_super();
+update public.app_settings set value = jsonb_set(value, '{staff,manage_checklist}', 'false') where key = 'role_permissions';
+select pg_temp.act_as('member@kp.test');
+select pg_temp.expect_error($$insert into public.master_categories (code, name) values ('TS3', 'Nope')$$, 'row-level security',
+  'staff without manage_checklist cannot add a category');
+select pg_temp.act_as('cfo@client.test');
+select pg_temp.assert((select count(*) = 0 from public.master_folders), 'clients cannot read the default folders');
+
+-- settings are Super admin only
+select pg_temp.act_as('admin@kp.test');
+update public.app_settings set value = '1' where key = 'uploads.max_file_mb';
+select pg_temp.expect_error($$insert into public.app_settings (key, value) values ('x.test', '1')$$, 'row-level security',
+  'admins cannot add settings');
+select pg_temp.act_as('super@kp.test');
+select pg_temp.assert((select value = '100'::jsonb from public.app_settings where key = 'uploads.max_file_mb'), 'admins cannot change settings');
+update public.app_settings set value = '100' where key = 'uploads.max_file_mb';
+
+-- file classes --------------------------------------------------------------------
+select pg_temp.assert((select file_class = 'permanent' from public.master_checklist_items where code = 'GEN-01')
+  and (select file_class = 'current' from public.master_checklist_items where code = 'FST-01')
+  and (select count(*) = 0 from public.master_checklist_items where file_class is null and code !~ '^TST'),
+  'seeded file classes: CAC certificate permanent, trial balance current, none missing');
+select pg_temp.assert((select file_class = 'permanent' from public.request_items where engagement_id = current_setting('test.eng')::uuid and code = 'GEN-01')
+  and (select file_class = 'current' from public.request_items where engagement_id = current_setting('test.eng')::uuid and code = 'CSH-01'),
+  'file class copied into engagement items on creation');
+select pg_temp.act_as('lead@kp.test');
+select pg_temp.assert(public.add_master_items_to_engagement(current_setting('test.eng4')::uuid,
+  array(select id from public.master_checklist_items where code in ('JNL-01', 'ITE-01', 'TST-01'))) = 3, 'master items added to an engagement');
+select pg_temp.assert((select file_class = 'current' from public.request_items where engagement_id = current_setting('test.eng4')::uuid and code = 'JNL-01')
+  and (select file_class = 'permanent' from public.request_items where engagement_id = current_setting('test.eng4')::uuid and code = 'ITE-01'),
+  'file class copied by add_master_items_to_engagement');
+select pg_temp.assert((select count(*) = 1 from public.engagement_folders where engagement_id = current_setting('test.eng4')::uuid and name = '15 Journals'),
+  'new default folder created on the engagement');
+select pg_temp.assert((select priority = 'normal' from public.request_items where engagement_id = current_setting('test.eng4')::uuid and code = 'TST-01'),
+  'add_master_items keeps the master priority');
+select set_config('test.eng5', public.create_engagement(
+  '11111111-1111-1111-1111-111111111111', (select id from public.engagement_types where code = 'SA'),
+  'Priority check', null, '2028-12-31', (select id from public.profiles where email = 'lead@kp.test'),
+  array(select id from public.master_checklist_items where code = 'TST-01'))::text, false);
+select pg_temp.assert((select priority = 'important' from public.request_items where engagement_id = current_setting('test.eng5')::uuid and code = 'TST-01'),
+  'create_engagement raises critical normal-priority items to Important');
+update public.request_items set file_class = 'permanent' where engagement_id = current_setting('test.eng4')::uuid and code = 'JNL-01';
+select pg_temp.assert((select file_class = 'permanent' from public.request_items where engagement_id = current_setting('test.eng4')::uuid and code = 'JNL-01'),
+  'the team can change an item''s file class');
+select pg_temp.act_as('admin@kp.test');
+update public.master_checklist_items set file_class = 'current' where code = 'ITE-01';
+select pg_temp.assert((select revision = 2 from public.master_checklist_items where code = 'ITE-01'), 'changing the file class bumps the master revision');
+select pg_temp.act_as('lead@kp.test');
+select public.pull_master_changes(current_setting('test.eng4')::uuid);
+select pg_temp.assert((select file_class = 'current' from public.request_items where engagement_id = current_setting('test.eng4')::uuid and code = 'ITE-01'),
+  'pulling master changes refreshes the file class');
+
+-- no per-item file type enforcement ---------------------------------------------------
+select pg_temp.as_super();
+update public.request_items set expected_file_types = '{pdf}' where engagement_id = current_setting('test.eng')::uuid and code = 'FST-01';
+select pg_temp.act_as('cfo@client.test');
+select set_config('test.tb', (select file_id::text from public.begin_upload(
+  (select id from public.request_items where engagement_id = current_setting('test.eng')::uuid and code = 'FST-01'),
+  'Trial balance.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 4096)), false);
+select pg_temp.assert(current_setting('test.tb') <> '', 'an .xlsx is accepted on an item whose legacy expected types say pdf');
+select pg_temp.expect_error($$select * from public.begin_upload((select id from public.request_items where engagement_id = current_setting('test.eng')::uuid and code = 'FST-01'), 'x.exe', 'application/octet-stream', 10)$$,
+  'not allowed', 'the firm-wide allowed types still apply');
+select pg_temp.as_super();
+select public.complete_upload(current_setting('test.tb')::uuid, (select id from auth.users where email = 'cfo@client.test'));
+select pg_temp.act_as('cfo@client.test');
+select public.submit_item((select id from public.request_items where engagement_id = current_setting('test.eng')::uuid and code = 'FST-01'));
+
+-- notification settings ------------------------------------------------------------------
+select pg_temp.as_super();
+select pg_temp.assert((select count(*) = 0 from public.engagements e
+  where not exists (select 1 from public.engagement_notification_settings s where s.engagement_id = e.id)),
+  'every engagement has notification settings');
+select pg_temp.assert((select client_instant and client_reminder_frequency = 'weekly' and client_reminder_time = '17:00'
+  and team_reminder_frequency = 'weekdays' from public.engagement_notification_settings where engagement_id = current_setting('test.eng')::uuid),
+  'settings start from the firm-wide defaults');
+update public.app_settings set value = value || '{"client_reminder_time": "18:00", "team_instant": false}' where key = 'notifications.defaults';
+select pg_temp.act_as('lead@kp.test');
+select set_config('test.eng6', public.create_engagement(
+  '11111111-1111-1111-1111-111111111111', (select id from public.engagement_types where code = 'AD'),
+  'Defaults check', null, '2028-12-31', (select id from public.profiles where email = 'lead@kp.test'), '{}'::uuid[])::text, false);
+select pg_temp.assert((select client_reminder_time = '18:00' and not team_instant from public.engagement_notification_settings
+  where engagement_id = current_setting('test.eng6')::uuid), 'new engagements copy the changed firm-wide defaults');
+select pg_temp.as_super();
+update public.app_settings set value = '{"client_reminder_time": "not a time"}' where key = 'notifications.defaults';
+select pg_temp.act_as('lead@kp.test');
+select set_config('test.eng7', public.create_engagement(
+  '11111111-1111-1111-1111-111111111111', (select id from public.engagement_types where code = 'AD'),
+  'Bad defaults', null, '2028-12-31', (select id from public.profiles where email = 'lead@kp.test'), '{}'::uuid[])::text, false);
+select pg_temp.assert((select client_reminder_time = '17:00' from public.engagement_notification_settings
+  where engagement_id = current_setting('test.eng7')::uuid), 'malformed defaults never block engagement creation');
+select pg_temp.as_super();
+update public.app_settings set value = '{"client_instant": true, "client_reminder_frequency": "weekly", "client_reminder_weekday": 1,
+  "client_reminder_time": "17:00", "client_only_when_outstanding": true, "team_instant": true,
+  "team_reminder_frequency": "weekdays", "team_reminder_weekday": 1, "team_reminder_time": "09:00"}' where key = 'notifications.defaults';
+
+select pg_temp.act_as('member@kp.test');
+select pg_temp.assert((select count(*) = 1 from public.engagement_notification_settings where engagement_id = current_setting('test.eng')::uuid),
+  'team members can read the engagement''s notification settings');
+update public.engagement_notification_settings set client_instant = false where engagement_id = current_setting('test.eng')::uuid;
+select pg_temp.act_as('manager@kp.test');
+select pg_temp.assert((select client_instant from public.engagement_notification_settings where engagement_id = current_setting('test.eng')::uuid),
+  'a team member (not lead/manager) cannot change notification settings');
+update public.engagement_notification_settings set client_reminder_frequency = 'daily', client_reminder_time = '09:00',
+  team_reminder_frequency = 'daily', team_reminder_time = '08:00'
+where engagement_id = current_setting('test.eng')::uuid;
+select pg_temp.assert((select client_reminder_frequency = 'daily' and updated_by = auth.uid() from public.engagement_notification_settings
+  where engagement_id = current_setting('test.eng')::uuid), 'a manager changes notification settings (stamped)');
+select pg_temp.act_as('cfo@client.test');
+select pg_temp.assert((select count(*) = 0 from public.engagement_notification_settings), 'clients cannot read the team''s notification settings');
+update public.engagement_notification_settings set client_instant = false;
+select pg_temp.act_as('outsider@kp.test');
+select pg_temp.assert((select count(*) = 0 from public.engagement_notification_settings), 'staff outside the team cannot read notification settings');
+select pg_temp.expect_error($$select * from public.email_dispatch_queue()$$, 'permission denied', 'only the server (service role) can read the e-mail queue');
+select pg_temp.expect_error($$select * from public.reminder_digests_due()$$, 'permission denied', 'only the server (service role) can select reminders');
+select pg_temp.as_super();
+select pg_temp.assert((select client_instant from public.engagement_notification_settings where engagement_id = current_setting('test.eng')::uuid),
+  'client update had no effect');
+
+-- instant e-mail queue ---------------------------------------------------------------------
+select pg_temp.assert((select count(*) > 0 from public.email_dispatch_queue(2000) where deliver), 'new notifications are queued for e-mail');
+select public.mark_notifications_emailed(array(select notification_id from public.email_dispatch_queue(2000)));
+select pg_temp.assert((select count(*) = 0 from public.email_dispatch_queue(2000)), 'e-mailed notifications leave the queue');
+insert into public.notifications (user_id, type, title, engagement_id, request_item_id) values
+  ((select id from public.profiles where email = 'cfo@client.test'), 'item_queried', 'Q1', current_setting('test.eng')::uuid,
+   (select id from public.request_items where engagement_id = current_setting('test.eng')::uuid and code = 'REC-01')),
+  ((select id from public.profiles where email = 'cfo@client.test'), 'item_queried', 'Q-locked', current_setting('test.eng')::uuid,
+   (select id from public.request_items where engagement_id = current_setting('test.eng')::uuid and code = 'REC-02')),
+  ((select id from public.profiles where email = 'lead@kp.test'), 'item_submitted', 'S1', current_setting('test.eng')::uuid, null),
+  ((select id from public.profiles where email = 'outsider@kp.test'), 'comment', 'Not on team', current_setting('test.eng')::uuid, null);
+insert into public.notifications (user_id, type, title, engagement_id, created_at) values
+  ((select id from public.profiles where email = 'lead@kp.test'), 'comment', 'Old', current_setting('test.eng')::uuid, now() - interval '3 days');
+update public.request_items set is_locked = true where engagement_id = current_setting('test.eng')::uuid and code = 'REC-02';
+select pg_temp.assert((select deliver from public.email_dispatch_queue() where title = 'Q1')
+  and (select deliver from public.email_dispatch_queue() where title = 'S1'), 'client and team notifications are delivered');
+select pg_temp.assert((select not deliver and skip_reason like '%not visible%' from public.email_dispatch_queue() where title = 'Q-locked'),
+  'a notification about a locked item the client cannot see is never e-mailed');
+select pg_temp.assert((select not deliver and skip_reason like '%team%' from public.email_dispatch_queue() where title = 'Not on team'),
+  'staff no longer on the team are not e-mailed');
+select pg_temp.assert((select not deliver and skip_reason like '%older%' from public.email_dispatch_queue() where title = 'Old'),
+  'old notifications are not e-mailed');
+update public.engagement_notification_settings set client_instant = false where engagement_id = current_setting('test.eng')::uuid;
+select pg_temp.assert((select not deliver and skip_reason like '%off for the client%' from public.email_dispatch_queue() where title = 'Q1')
+  and (select deliver from public.email_dispatch_queue() where title = 'S1'), 'client instant e-mails off: client skipped, team still e-mailed');
+update public.engagement_notification_settings set client_instant = true where engagement_id = current_setting('test.eng')::uuid;
+update public.profiles set is_active = false where email = 'cfo@client.test';
+select pg_temp.assert((select not deliver and skip_reason = 'recipient deactivated' from public.email_dispatch_queue() where title = 'Q1'),
+  'deactivated users are not e-mailed');
+update public.profiles set is_active = true where email = 'cfo@client.test';
+select public.mark_notifications_emailed(array(select notification_id from public.email_dispatch_queue() where title = 'S1'), 'SMTP timeout');
+select pg_temp.assert((select email_attempts = 1 and emailed_at is null and email_error = 'SMTP timeout' from public.notifications where title = 'S1'),
+  'a failed send is recorded and retried');
+update public.notifications set email_attempts = 4 where title = 'S1';
+select public.mark_notifications_emailed(array(select id from public.notifications where title = 'S1'), 'SMTP timeout');
+select pg_temp.assert((select emailed_at is not null and email_skipped like 'failed after%' from public.notifications where title = 'S1'),
+  'a send that keeps failing is given up after 5 attempts');
+select public.mark_notifications_emailed(array(select notification_id from public.email_dispatch_queue(2000)));
+
+-- reminder digests (2026-10-26 is a Monday; times are Lagos = UTC+1) ------------------------
+select set_config('test.mon10', '2026-10-26 09:30:00+00', false);  -- 10:30 Lagos
+select pg_temp.assert(public.reminder_is_due('weekly', 1::smallint, '17:00', 1, '17:05')
+  and not public.reminder_is_due('weekly', 1::smallint, '17:00', 2, '17:05')
+  and not public.reminder_is_due('weekly', 1::smallint, '17:00', 1, '16:59')
+  and public.reminder_is_due('weekdays', 1::smallint, '09:00', 5, '09:00')
+  and not public.reminder_is_due('weekdays', 1::smallint, '09:00', 6, '10:00')
+  and not public.reminder_is_due('off', 1::smallint, '00:00', 1, '23:00'), 'reminder schedule rules (weekly / weekdays / off / time of day)');
+select set_config('test.cfo_n', (select count(*)::text from public.request_items ri
+  where ri.engagement_id = current_setting('test.eng')::uuid and ri.status in ('requested', 'queried') and not ri.is_locked), false);
+select pg_temp.assert((select item_count = current_setting('test.cfo_n')::int and jsonb_array_length(items) = item_count
+  from public.reminder_digests_due(current_setting('test.mon10')::timestamptz)
+  where engagement_id = current_setting('test.eng')::uuid and audience = 'client' and email = 'cfo@client.test'),
+  'client digest lists the outstanding items the client can see');
+select pg_temp.assert((select not (items @> jsonb_build_array(jsonb_build_object('code', 'REC-02')))
+  from public.reminder_digests_due(current_setting('test.mon10')::timestamptz)
+  where engagement_id = current_setting('test.eng')::uuid and audience = 'client' and email = 'cfo@client.test'),
+  'client digest never includes a locked item the client cannot see');
+select pg_temp.assert((select bool_and(item_count = 1 and items -> 0 ->> 'code' = 'FST-01') and count(*) = 3
+  from public.reminder_digests_due(current_setting('test.mon10')::timestamptz)
+  where engagement_id = current_setting('test.eng')::uuid and audience = 'team'),
+  'team digest: each team member gets the client submission awaiting review');
+select pg_temp.assert((select count(*) = 0 from public.reminder_digests_due('2026-10-26 06:30:00+00')
+  where engagement_id = current_setting('test.eng')::uuid), 'nothing is due before the configured time');
+select pg_temp.assert((select count(*) = 0 from public.reminder_digests_due(current_setting('test.mon10')::timestamptz)
+  where engagement_id in (current_setting('test.eng3')::uuid, current_setting('test.eng4')::uuid)),
+  'unreleased engagements get no reminders');
+select pg_temp.assert((select count(*) = 0 from public.reminder_digests_due(current_setting('test.mon10')::timestamptz)
+  where engagement_id = current_setting('test.eng2')::uuid and audience = 'client'),
+  'weekly client reminders are not sent before their time (17:00)');
+select public.record_reminder(current_setting('test.eng')::uuid, (select id from public.profiles where email = 'cfo@client.test'),
+  'client', '2026-10-26', 5, 'sent');
+select pg_temp.assert((select count(*) = 0 from public.reminder_digests_due(current_setting('test.mon10')::timestamptz)
+  where engagement_id = current_setting('test.eng')::uuid and audience = 'client'), 'a reminder is sent at most once per day');
+select pg_temp.assert((select count(*) = 1 from public.reminder_digests_due('2026-10-27 09:30:00+00')
+  where engagement_id = current_setting('test.eng')::uuid and audience = 'client'), 'the daily reminder is due again the next day');
+update public.engagement_client_access set revoked_at = now()
+where engagement_id = current_setting('test.eng')::uuid and contact_id = (select id from public.client_contacts where email = 'cfo@client.test');
+select pg_temp.assert((select count(*) = 0 from public.reminder_digests_due('2026-10-27 09:30:00+00')
+  where engagement_id = current_setting('test.eng')::uuid and audience = 'client'), 'revoked client users get no reminders');
+update public.engagement_client_access set revoked_at = null
+where engagement_id = current_setting('test.eng')::uuid and contact_id = (select id from public.client_contacts where email = 'cfo@client.test');
+update public.engagement_notification_settings set client_only_when_outstanding = false, client_reminder_frequency = 'daily', client_reminder_time = '09:00'
+where engagement_id = current_setting('test.eng2')::uuid;
+select pg_temp.assert((select count(*) = 1 from public.reminder_digests_due(current_setting('test.mon10')::timestamptz)
+  where engagement_id = current_setting('test.eng2')::uuid and audience = 'client'), 'client reminder due on the second engagement');
+select pg_temp.as_super();
+select set_config('app.workflow', 'on', false);
+update public.request_items set status = 'accepted' where engagement_id = current_setting('test.eng2')::uuid;
+select set_config('app.workflow', '', false);
+select pg_temp.assert((select item_count = 0 from public.reminder_digests_due(current_setting('test.mon10')::timestamptz)
+  where engagement_id = current_setting('test.eng2')::uuid and audience = 'client'),
+  '"only when outstanding" off: the client still gets a (nothing outstanding) reminder');
+update public.engagement_notification_settings set client_only_when_outstanding = true where engagement_id = current_setting('test.eng2')::uuid;
+select pg_temp.assert((select count(*) = 0 from public.reminder_digests_due(current_setting('test.mon10')::timestamptz)
+  where engagement_id = current_setting('test.eng2')::uuid), '"only when outstanding" on: no reminder when nothing is outstanding; team skipped without submissions');

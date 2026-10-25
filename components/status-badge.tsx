@@ -1,6 +1,9 @@
-import { AlertTriangle, CheckCircle2, Circle, Clock, Eye, MinusCircle, ShieldAlert } from "lucide-react";
+"use client";
+
+import { AlertTriangle, CheckCircle2, Circle, Clock, Eye, Hourglass, MinusCircle, ShieldAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { BEING_PREPARED, ENGAGEMENT_STATUS, ITEM_STATUS, PRIORITY } from "@/lib/constants";
+import { useStageLabel } from "@/components/stage-labels";
+import { REQUEST_IN_PROGRESS, ENGAGEMENT_STATUS, ITEM_STATUS, PRIORITY } from "@/lib/constants";
 import type { EngagementStatus, ItemPriority, ItemStatus } from "@/lib/types";
 
 const ICON: Record<ItemStatus, React.ComponentType<{ className?: string }>> = {
@@ -25,10 +28,24 @@ export function ItemStatusBadge({ status, audience = "team" }: { status: ItemSta
 
 export function EngagementStatusBadge({ status, audience = "team" }: { status: EngagementStatus; audience?: "team" | "client" }) {
   if (audience === "client" && (status === "draft" || status === "awaiting_approval")) {
-    return <Badge variant="info">{BEING_PREPARED}</Badge>;
+    return (
+      <Badge variant="info">
+        <Hourglass />
+        {REQUEST_IN_PROGRESS}
+      </Badge>
+    );
   }
-  const s = ENGAGEMENT_STATUS[status];
-  return <Badge variant={s.variant}>{s.label}</Badge>;
+  return <StageBadge status={status} />;
+}
+
+function StageBadge({ status }: { status: EngagementStatus }) {
+  const label = useStageLabel(status);
+  return (
+    <Badge variant={ENGAGEMENT_STATUS[status].variant}>
+      <span aria-hidden className="size-1.5 rounded-full bg-current opacity-80" />
+      {label}
+    </Badge>
+  );
 }
 
 export function PriorityBadge({ priority }: { priority: ItemPriority }) {
@@ -42,12 +59,12 @@ export function CriticalBadge({ waived, audience = "team" }: { waived?: boolean;
     return (
       <Badge variant="danger" title="We need this before the engagement can start">
         <ShieldAlert />
-        Needed first
+        Critical
       </Badge>
     );
   }
   return (
-    <Badge variant={waived ? "muted" : "danger"} title={waived ? "Critical item — waived by engagement lead" : "Critical: needed before fieldwork starts"}>
+    <Badge variant={waived ? "muted" : "danger"} title={waived ? "Critical item — waived by the partner or team lead" : "Critical: needed before the engagement moves to execution"}>
       <ShieldAlert />
       {waived ? "Critical · waived" : "Critical"}
     </Badge>

@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
-  CalendarDays, CheckCircle2, Download, Eye, FileText, FolderOpen, History, Loader2, MessageSquareWarning,
-  MinusCircle, Pencil, RotateCcw, Send, ShieldAlert, ShieldOff, Trash2, User,
+  CalendarDays, CheckCircle2, Download, Eye, FileText, FolderOpen, History, Loader2, Lock, LockOpen, MessageSquareWarning,
+  MinusCircle, Pencil, RotateCcw, Send, ShieldAlert, ShieldOff, Trash2, Users,
 } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -18,11 +18,13 @@ import { CriticalBadge, ItemStatusBadge, PriorityBadge } from "@/components/stat
 import { CommentThread } from "@/components/items/comment-thread";
 import { FileUploader } from "@/components/items/file-uploader";
 import { SampleSchedulePanel } from "@/components/items/sample-schedule";
+import { AssigneeAvatars, AssigneePicker, selectionFrom, type AssigneeSelection, type PersonWithRole } from "@/components/items/assignees";
+import { FILE_CLASS } from "@/lib/checklist-constants";
 import { removeDraftFile } from "@/lib/actions/uploads";
 import { createClient } from "@/lib/supabase/client";
 import { fmtDate, fmtDateTime, isOverdue } from "@/lib/dates";
 import { ITEM_STATUS } from "@/lib/constants";
-import type { EngagementStatus, Folder, ItemFile, ItemStatus, Person, RequestItem, ReviewAction, StatusHistory } from "@/lib/types";
+import type { EngagementStatus, Folder, ItemAssignee, ItemFile, ItemStatus, Person, RequestItem, ReviewAction, StatusHistory } from "@/lib/types";
 import { cn, formatBytes, friendlyError } from "@/lib/utils";
 
 const OPEN_ENGAGEMENT: EngagementStatus[] = ["pre_engagement", "acceptance_review", "accepted", "in_progress"];
@@ -34,7 +36,10 @@ export interface ItemPerms {
   /** Edit the request list (lead/manager, or any team member while in draft) */
   canEdit?: boolean;
   canAccept: boolean;
+  /** Partner or team lead (waive, complete with open items) */
   isLead: boolean;
+  /** On the engagement team (or Super admin): may work on items. Viewers are read-only. */
+  isTeam?: boolean;
 }
 
 type NoteAction = { action: ReviewAction | "waive"; title: string; description: string; required: boolean; cta: string } | null;
@@ -48,6 +53,7 @@ export function ItemDetailSheet({
   engagementStatus,
   perms,
   team,
+  clientUsers = [],
   folders,
   upload,
   onChanged,
@@ -60,7 +66,9 @@ export function ItemDetailSheet({
   userId: string;
   engagementStatus: EngagementStatus;
   perms: ItemPerms;
-  team: Person[];
+  team: PersonWithRole[];
+  /** Client users with access (assignable on the client side) */
+  clientUsers?: Person[];
   folders: Folder[];
   upload: { allowedExtensions: string[]; maxFileMb: number };
   onChanged: () => void;
@@ -77,19 +85,24 @@ export function ItemDetailSheet({
   const [submitNote, setSubmitNote] = useState("");
   const [noteAction, setNoteAction] = useState<NoteAction>(null);
   const [commentsKey, setCommentsKey] = useState(0);
+  const [assigneeRows, setAssigneeRows] = useState<ItemAssignee[]>([]);
+  const [assignDraft, setAssignDraft] = useState<AssigneeSelection | null>(null);
 
   useEffect(() => setCurrent(item), [item]);
 
   const load = useCallback(async () => {
     if (!item) return;
-    const [{ data: fresh }, { data: f }, h] = await Promise.all([
+    const [{ data: fresh }, { data: f }, h, { data: as }] = await Promise.all([
       supabase.from("request_items").select("*").eq("id", item.id).maybeSingle(),
       supabase.from("request_item_files").select("*").eq("request_item_id", item.id).order("version_no", { ascending: false }).order("uploaded_at"),
       audience === "team"
         ? supabase.from("status_history").select("*").eq("entity_type", "request_item").eq("entity_id", item.id).order("changed_at", { ascending: false })
         : Promise.resolve({ data: [] }),
+      supabase.from("request_item_assignees").select("*").eq("request_item_id", item.id).order("assigned_at"),
     ]);
     if (fresh) setCurrent(fresh as RequestItem);
+    setAssigneeRows((as as ItemAssignee[]) ?? []);
+    setAssignDraft(null);
     setFiles((f as ItemFile[]) ?? []);
     setHistory((h.data as StatusHistory[]) ?? []);
     const { count } = await supabase.from("sample_schedules").select("id", { count: "exact", head: true }).eq("request_item_id", item.id);
@@ -106,6 +119,7 @@ export function ItemDetailSheet({
       .channel(`item:${item.id}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "request_item_files", filter: `request_item_id=eq.${item.id}` }, () => load())
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "request_items", filter: `id=eq.${item.id}` }, () => load())
+      .on("postgres_changes", { event: "*", schema: "public", table: "request_item_assignees", filter: `request_item_id=eq.${item.id}` }, () => load())
       .subscribe();
     return () => {
       supabase.removeChannel(ch);
@@ -123,10 +137,17 @@ export function ItemDetailSheet({
 
   if (!current) return null;
   const it = current;
-  const people = new Map(team.map((t) => [t.id, t]));
+  const people = new Map<string, Person>([...team, ...clientUsers].map((t) => [t.id, t]));
+  const isTeam = audience === "team" && (perms.isTeam ?? true);
+  // Who may change assignees / the lock (mirrors set_request_item_assignees; the database decides)
+  const canFirm = audience === "team" && (it.is_locked ? perms.canManage : isTeam);
+  const canClient = audience === "team" ? (it.is_locked ? perms.canManage : Boolean(perms.canEdit ?? perms.canManage)) : !it.is_locked;
+  const canLock = audience === "team" && (perms.canManage || (it.created_by === userId && isTeam));
+  const assignValue = assignDraft ?? selectionFrom(assigneeRows);
+  const assignDirty = assignDraft !== null;
   const folder = folders.find((f) => f.id === it.folder_id);
   const engagementOpen = OPEN_ENGAGEMENT.includes(engagementStatus);
-  const canUpload = engagementOpen && UPLOADABLE.includes(it.status);
+  const canUpload = engagementOpen && UPLOADABLE.includes(it.status) && (audience === "client" || isTeam);
   const overdue = isOverdue(it.due_date, it.status);
 
   async function refreshAll() {
@@ -184,6 +205,36 @@ export function ItemDetailSheet({
     load();
   }
 
+  async function saveAssignees() {
+    if (!assignDraft) return;
+    const before = selectionFrom(assigneeRows);
+    setBusy(true);
+    for (const side of ["firm", "client"] as const) {
+      const a = before[side], b = assignDraft[side];
+      if (a.length === b.length && a.every((x) => b.includes(x))) continue;
+      const { error } = await supabase.rpc("set_request_item_assignees", { p_item_id: it.id, p_side: side, p_user_ids: b });
+      if (error) {
+        setBusy(false);
+        load();
+        return toast.error(friendlyError(error));
+      }
+    }
+    setBusy(false);
+    toast.success("Assignees updated");
+    refreshAll();
+  }
+
+  async function setLock(on: boolean) {
+    if (on && !assigneeRows.some((a) => a.side === "client") && audience === "team"
+        && !confirm("No client user is assigned, so no one at the client will see this request. Lock it anyway?")) return;
+    setBusy(true);
+    const { error } = await supabase.rpc("set_request_item_lock", { p_item_id: it.id, p_locked: on });
+    setBusy(false);
+    if (error) return toast.error(friendlyError(error));
+    toast.success(on ? "Request locked: only the people assigned (plus the partner, team lead and managers) can see it" : "Request unlocked");
+    refreshAll();
+  }
+
   async function del() {
     if (!confirm(`Delete ${it.code} "${it.title}"? This cannot be undone.`)) return;
     const { error } = await supabase.rpc("delete_request_item", { p_item_id: it.id });
@@ -223,7 +274,7 @@ export function ItemDetailSheet({
     </li>
   );
 
-  const teamActions = audience === "team" && engagementStatus !== "archived" ? (
+  const teamActions = isTeam && engagementStatus !== "archived" ? (
     <div className="flex flex-wrap gap-2">
       {it.status === "submitted" ? (
         <Button size="sm" variant="outline" disabled={busy} onClick={() => review("start_review")}>
@@ -290,7 +341,7 @@ export function ItemDetailSheet({
               setNoteAction({
                 action: "waive",
                 title: "Waive critical item",
-                description: "Waiving lets the engagement pass the acceptance gate without this item. A reason is mandatory and is recorded in the audit trail.",
+                description: "Waiving lets the engagement move to execution without this item. A reason is mandatory and is recorded in the audit trail.",
                 required: true,
                 cta: "Waive item",
               })
@@ -311,7 +362,9 @@ export function ItemDetailSheet({
             <span className="font-mono">{it.code}</span>
             <ItemStatusBadge status={it.status} audience={audience} />
             {it.is_critical ? <CriticalBadge waived={it.is_waived} audience={audience} /> : null}
-            {audience === "team" && !(it.is_critical && it.priority === "high") ? <PriorityBadge priority={it.priority} /> : null}
+            {audience === "team" && !(it.is_critical && it.priority === "important") ? <PriorityBadge priority={it.priority} /> : null}
+            {it.file_class ? <Badge variant="outline">{FILE_CLASS[it.file_class].label}</Badge> : null}
+            {it.is_locked ? <Badge variant="secondary"><Lock /> Locked</Badge> : null}
             {overdue ? <Badge variant="danger">Overdue</Badge> : null}
           </div>
           <SheetTitle className="text-lg leading-snug">{it.title}</SheetTitle>
@@ -323,22 +376,18 @@ export function ItemDetailSheet({
             <span className={cn("flex items-center gap-1", overdue && "font-medium text-destructive")}>
               <CalendarDays className="size-3.5" /> Due {fmtDate(it.due_date)}
             </span>
-            {audience === "team" ? (
-              <span className="flex items-center gap-1">
-                <User className="size-3.5" /> {it.assignee_id ? people.get(it.assignee_id)?.full_name ?? "Assigned" : "Unassigned"}
-              </span>
-            ) : null}
+            <span className="flex items-center gap-1.5">
+              <Users className="size-3.5" aria-hidden />
+              {assigneeRows.length ? <AssigneeAvatars assignees={assigneeRows} people={people} max={4} /> : "Unassigned"}
+            </span>
           </div>
         </SheetHeader>
 
         <div className="flex-1 space-y-5 overflow-y-auto p-5">
           {it.guidance ? (
             <div className="rounded-lg bg-muted/60 p-3 text-sm">
-              <div className="mb-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase">What we need</div>
+              <div className="mb-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Description</div>
               <p className="whitespace-pre-wrap">{it.guidance}</p>
-              {it.expected_file_types.length ? (
-                <p className="mt-2 text-xs text-muted-foreground">Expected format: {it.expected_file_types.map((t) => t.toUpperCase()).join(", ")}</p>
-              ) : null}
             </div>
           ) : null}
 
@@ -352,14 +401,60 @@ export function ItemDetailSheet({
             <Alert variant="info">
               <ShieldOff />
               <div>
-                <div className="font-medium">Waived by the engagement lead</div>
+                <div className="font-medium">Waived by the partner or team lead</div>
                 <div className="text-xs">{it.waiver_reason}</div>
               </div>
             </Alert>
           ) : null}
 
           {teamActions}
-          {audience === "team" && (perms.canEdit ?? perms.canManage) ? (
+
+          {canFirm || canClient || canLock || assigneeRows.length ? (
+            <section className="space-y-2 rounded-lg border p-3" aria-labelledby="item-assign-title">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 id="item-assign-title" className="flex-1 text-sm font-semibold">Assigned to</h3>
+                {canLock && engagementStatus !== "archived" ? (
+                  <Button size="sm" variant="ghost" disabled={busy} onClick={() => setLock(!it.is_locked)}>
+                    {it.is_locked ? <><LockOpen /> Unlock</> : <><Lock /> Lock</>}
+                  </Button>
+                ) : null}
+              </div>
+              {it.is_locked ? (
+                <p className="text-xs text-muted-foreground">
+                  Locked: only the people assigned{audience === "team" ? " (plus the partner, team lead and managers)" : ""} can see this request.
+                </p>
+              ) : null}
+              {(canFirm || canClient) && engagementStatus !== "archived" ? (
+                <>
+                  <AssigneePicker
+                    team={team}
+                    clientUsers={clientUsers}
+                    value={assignValue}
+                    onChange={setAssignDraft}
+                    firmEditable={canFirm}
+                    clientEditable={canClient}
+                    label="Assigned to"
+                  />
+                  {assignDirty ? (
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={saveAssignees} disabled={busy}>{busy ? <Loader2 className="animate-spin" /> : null} Save assignees</Button>
+                      <Button size="sm" variant="ghost" onClick={() => setAssignDraft(null)}>Cancel</Button>
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <ul className="flex flex-wrap gap-1.5 text-xs">
+                  {assigneeRows.map((a) => (
+                    <li key={a.user_id} className="rounded-full border px-2 py-0.5">
+                      {people.get(a.user_id)?.full_name ?? "Someone"} <span className="text-muted-foreground">· {a.side === "firm" ? "Firm" : "Client"}</span>
+                    </li>
+                  ))}
+                  {assigneeRows.length === 0 ? <li className="text-muted-foreground">Nobody</li> : null}
+                </ul>
+              )}
+            </section>
+          ) : null}
+          {isTeam && (perms.canEdit ?? perms.canManage) ? (
             <div className="flex gap-2">
               {onEdit ? (
                 <Button size="sm" variant="ghost" onClick={() => onEdit(it)}>
@@ -387,14 +482,14 @@ export function ItemDetailSheet({
             </TabsList>
 
             <TabsContent value="files" className="space-y-4 pt-4">
-              {firmFiles.length || (audience === "team" && engagementStatus !== "archived") ? (
+              {firmFiles.length || (isTeam && engagementStatus !== "archived") ? (
                 <div className="space-y-2 rounded-lg border bg-accent/30 p-3">
                   <div className="text-sm font-semibold">{audience === "team" ? "Shared with the client by the firm" : "From the engagement team"}</div>
                   {audience === "team" ? (
                     <p className="text-xs text-muted-foreground">e.g. your sample selection or a template to complete. The client sees these as soon as the list is released.</p>
                   ) : null}
                   {firmFiles.length ? <ul className="space-y-2">{firmFiles.map((f) => fileRow(f, audience === "team"))}</ul> : null}
-                  {audience === "team" ? (
+                  {isTeam ? (
                     <FileUploader itemId={it.id} kind="firm_document" allowedExtensions={upload.allowedExtensions} maxFileMb={upload.maxFileMb} onUploaded={load} compact label="Share a document with the client" />
                   ) : null}
                 </div>
@@ -450,13 +545,14 @@ export function ItemDetailSheet({
                   team={team}
                   engagementStatus={engagementStatus}
                   upload={upload}
-                  canManageSchedule={audience === "team" && engagementStatus !== "archived"}
+                  canManageSchedule={isTeam && engagementStatus !== "archived"}
+                  canComment={audience === "client" || isTeam}
                 />
               ) : null}
             </TabsContent>
 
             <TabsContent value="comments" className="pt-4">
-              <CommentThread itemId={it.id} userId={userId} audience={audience} team={team} refreshKey={commentsKey} />
+              <CommentThread itemId={it.id} userId={userId} audience={audience} team={team} refreshKey={commentsKey} canPost={audience === "client" || isTeam} />
             </TabsContent>
 
             {audience === "team" ? (

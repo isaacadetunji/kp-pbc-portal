@@ -1,50 +1,86 @@
+"use client";
+
 import Link from "next/link";
-import { Check } from "lucide-react";
+import { ArrowLeft, CalendarDays, Check } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { ActiveTabScroller } from "@/components/engagement/active-tab-scroller";
 import { EngagementStatusBadge } from "@/components/status-badge";
-import { ENGAGEMENT_STATUS, MONTHS } from "@/lib/constants";
+import { useStageLabels } from "@/components/stage-labels";
+import { MONTHS } from "@/lib/constants";
+import { STAGE_FLOW, stageKey } from "@/lib/stages";
+import { tabClass } from "@/lib/tab-class";
 import { fmtDate } from "@/lib/dates";
 import type { Client, Engagement, EngagementType } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-const STEPS = [
-  { key: "draft", label: "Draft" },
-  { key: "awaiting_approval", label: "Approval" },
-  { key: "pre_engagement", label: "Pre-engagement" },
-  { key: "acceptance_review", label: "Acceptance" },
-  { key: "in_progress", label: "Fieldwork" },
-  { key: "completed", label: "Completed" },
-];
-
-export function StageStepper({ status }: { status: Engagement["status"] }) {
-  const step = ENGAGEMENT_STATUS[status].step;
-  // steps: 0 draft, 1 approval, 2 pre-engagement, 3 acceptance (3 review, 4 accepted/declined), 5 fieldwork, 6 completed
-  const stepIndex = step <= 3 ? step : step === 4 ? 3 : step === 5 ? 4 : 5;
+/**
+ * Fixed main flow: Draft -> Approval -> Pre-execution -> Execution -> Completed.
+ * Done steps are green with a check, the current step is the brand action
+ * blue, upcoming steps are neutral grey, with connectors between them. Names
+ * come from Settings > Engagements (stage_labels).
+ */
+export function StageStepper({ status, className }: { status: Engagement["status"]; className?: string }) {
+  const labels = useStageLabels();
+  const key = stageKey(status);
+  const archived = status === "archived";
+  const current = archived ? STAGE_FLOW.length : STAGE_FLOW.indexOf(key);
   return (
-    <ol className="flex items-center gap-1 overflow-x-auto text-xs" aria-label="Engagement stage">
-      {STEPS.map((s, i) => {
-        const done = i < stepIndex || status === "archived";
-        const current = i === stepIndex && status !== "archived";
-        return (
-          <li key={s.key} className="flex items-center gap-1">
-            <span
-              className={cn(
-                "flex items-center gap-1.5 rounded-full px-2.5 py-1 whitespace-nowrap",
-                done && "bg-success-soft text-success",
-                current && "bg-primary text-primary-foreground",
-                !done && !current && "bg-muted text-muted-foreground",
-                current && status === "declined" && "bg-danger-soft text-destructive",
-              )}
-              aria-current={current ? "step" : undefined}
-            >
-              {done ? <Check className="size-3" /> : null}
-              {current && status === "declined" ? "Declined" : s.label}
-            </span>
-            {i < STEPS.length - 1 ? <span className="h-px w-3 bg-border" /> : null}
-          </li>
-        );
-      })}
-    </ol>
+    // `relative` keeps the sr-only text inside the scroll container (no page overflow on phones)
+    <div className={cn("relative overflow-x-auto", className)}>
+      <ol className="flex min-w-max items-center lg:min-w-0" aria-label="Engagement stage">
+        {STAGE_FLOW.map((k, i) => {
+          const done = i < current || (k === "completed" && status === "completed");
+          const isCurrent = i === current && !done;
+          return (
+            <li key={k} className={cn("flex items-center", i > 0 && "flex-1")} aria-current={isCurrent ? "step" : undefined}>
+              {i > 0 ? (
+                <span
+                  aria-hidden
+                  className={cn(
+                    "mx-2.5 h-0.5 min-w-6 flex-1 rounded-full sm:mx-3",
+                    i < current || done ? "bg-success-bar" : i === current ? "bg-gradient-to-r from-success-bar to-primary" : "bg-border-strong/70",
+                  )}
+                />
+              ) : null}
+              <span className="flex items-center gap-2">
+                <span
+                  aria-hidden
+                  className={cn(
+                    "grid size-7 shrink-0 place-items-center rounded-full text-xs font-semibold tabular-nums transition-colors",
+                    done && "bg-success-solid text-white shadow-[0_1px_2px_rgb(19_105_63/0.3)]",
+                    isCurrent && "bg-primary text-primary-foreground shadow-[0_0_0_4px_color-mix(in_oklab,var(--brand-primary)_16%,transparent)]",
+                    !done && !isCurrent && "border-[1.5px] border-border-strong bg-card text-muted-foreground",
+                  )}
+                >
+                  {done ? <Check className="size-3.5" strokeWidth={3} /> : i + 1}
+                </span>
+                <span className="flex flex-col leading-tight">
+                  <span className={cn("text-[13px] whitespace-nowrap", isCurrent ? "font-semibold text-primary" : done ? "font-medium text-foreground" : "text-muted-foreground")}>
+                    {labels[k]}
+                    <span className="sr-only">{done ? " (done)" : isCurrent ? " (current stage)" : " (upcoming)"}</span>
+                  </span>
+                  <span aria-hidden className={cn("hidden text-2xs whitespace-nowrap sm:block", isCurrent ? "text-primary/80" : done ? "text-success" : "text-subtle-foreground")}>
+                    {done ? "Done" : isCurrent ? "Current stage" : "Upcoming"}
+                  </span>
+                </span>
+              </span>
+            </li>
+          );
+        })}
+        {archived ? (
+          <li className="ml-4"><Badge variant="muted">{labels.archived}</Badge></li>
+        ) : null}
+      </ol>
+    </div>
+  );
+}
+
+function KeyDate({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <CalendarDays className="size-3.5 text-subtle-foreground" aria-hidden />
+      {label} <b className="font-semibold text-foreground">{value}</b>
+    </span>
   );
 }
 
@@ -56,43 +92,46 @@ export function EngagementHeader({
 }) {
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0 space-y-1">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <span className="font-mono">{engagement.code}</span>
-            <span>·</span>
-            <span>{type?.name}</span>
-            <EngagementStatusBadge status={engagement.status} />
-          </div>
-          <h1 className="text-2xl font-semibold tracking-tight">{engagement.name}</h1>
-          <div className="text-sm text-muted-foreground">
-            {client.name}
-            {client.rc_number ? ` · ${client.rc_number}` : ""}
-            {` · Period ${fmtDate(engagement.period_start)} – ${fmtDate(engagement.period_end)}`}
-            {client.year_end_month ? ` · Year end ${client.year_end_day ?? ""} ${MONTHS[client.year_end_month - 1]}` : ""}
-          </div>
-          {engagement.planned_start || engagement.documents_due || engagement.report_due ? (
-            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-              {engagement.planned_start ? <span>Planned start <b className="font-medium text-foreground">{fmtDate(engagement.planned_start)}</b></span> : null}
-              {engagement.documents_due ? <span>Documents due <b className="font-medium text-foreground">{fmtDate(engagement.documents_due)}</b></span> : null}
-              {engagement.report_due ? <span>Report due <b className="font-medium text-foreground">{fmtDate(engagement.report_due)}</b></span> : null}
+      <Link href="/engagements" className="inline-flex items-center gap-1 rounded text-[13px] font-medium text-muted-foreground hover:text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
+        <ArrowLeft className="size-4" aria-hidden /> All engagements
+      </Link>
+      <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+        <div className="surface-brand flex flex-col gap-4 p-5 sm:p-6 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0 space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span className="rounded-md border bg-card px-1.5 py-px font-mono text-[11px] font-medium text-foreground/80">{engagement.code}</span>
+              <span className="font-medium">{type?.name}</span>
+              <EngagementStatusBadge status={engagement.status} />
             </div>
-          ) : null}
+            <h1 className="text-2xl leading-8 font-bold text-foreground sm:text-[26px]">{engagement.name}</h1>
+            <div className="text-sm text-muted-foreground">
+              <span className="font-medium text-foreground/90">{client.name}</span>
+              {client.rc_number ? ` · ${client.rc_number}` : ""}
+              {` · Period ${fmtDate(engagement.period_start)} – ${fmtDate(engagement.period_end)}`}
+              {client.year_end_month ? ` · Year end ${client.year_end_day ?? ""} ${MONTHS[client.year_end_month - 1]}` : ""}
+            </div>
+            {engagement.planned_start || engagement.documents_due || engagement.report_due ? (
+              <div className="flex flex-wrap gap-x-5 gap-y-1 pt-1 text-xs text-muted-foreground">
+                {engagement.planned_start ? <KeyDate label="Planned start" value={fmtDate(engagement.planned_start)} /> : null}
+                {engagement.documents_due ? <KeyDate label="Documents due" value={fmtDate(engagement.documents_due)} /> : null}
+                {engagement.report_due ? <KeyDate label="Report due" value={fmtDate(engagement.report_due)} /> : null}
+              </div>
+            ) : null}
+          </div>
+          {actions ? <div className="flex flex-wrap gap-2">{actions}</div> : null}
         </div>
-        {actions ? <div className="flex flex-wrap gap-2">{actions}</div> : null}
+        <div className="border-t bg-muted/40 px-5 py-3.5 sm:px-6">
+          <StageStepper status={engagement.status} />
+        </div>
       </div>
-      <StageStepper status={engagement.status} />
       <ActiveTabScroller />
-      <nav className="flex gap-1 overflow-x-auto border-b" aria-label="Engagement sections">
+      <nav className="relative flex gap-1 overflow-x-auto border-b" aria-label="Engagement sections">
         {tabs.map((t) => (
           <Link
             key={t.key}
             href={`${basePath}?tab=${t.key}`}
             scroll={false}
-            className={cn(
-              "-mb-px border-b-2 px-3 py-2 text-sm font-medium whitespace-nowrap transition-colors",
-              tab === t.key ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
-            )}
+            className={tabClass(tab === t.key)}
             aria-current={tab === t.key ? "page" : undefined}
           >
             {t.label}

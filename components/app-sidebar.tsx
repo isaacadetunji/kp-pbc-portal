@@ -11,19 +11,28 @@ import { cn } from "@/lib/utils";
 
 type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }> };
 
+/** Which admin areas the user may open (from Settings > Access; Settings itself is Super admin only). */
+export interface NavAccess {
+  users: boolean;
+  clients: boolean;
+  checklist: boolean;
+  settings: boolean;
+}
+
 const MAIN: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/engagements", label: "Engagements", icon: Briefcase },
   { href: "/notifications", label: "Notifications", icon: Bell },
 ];
-const ADMIN: NavItem[] = [
-  { href: "/admin/users", label: "Users & access", icon: Users },
-  { href: "/admin/clients", label: "Clients", icon: Building2 },
-  { href: "/admin/checklist", label: "Master checklist", icon: ClipboardList },
-  { href: "/admin/settings", label: "Settings", icon: Settings },
+const ADMIN: (NavItem & { area: keyof NavAccess })[] = [
+  { href: "/admin/users", label: "Users & access", icon: Users, area: "users" },
+  { href: "/admin/clients", label: "Clients", icon: Building2, area: "clients" },
+  { href: "/admin/checklist", label: "Master checklist", icon: ClipboardList, area: "checklist" },
+  { href: "/admin/settings", label: "Settings", icon: Settings, area: "settings" },
 ];
 
-function NavLinks({ isAdmin, onNavigate }: { isAdmin: boolean; onNavigate?: () => void }) {
+function NavLinks({ access, onNavigate }: { access: NavAccess; onNavigate?: () => void }) {
+  const admin = ADMIN.filter((a) => access[a.area]);
   const path = usePathname();
   const link = (n: NavItem) => {
     const active = path === n.href || path.startsWith(`${n.href}/`);
@@ -46,10 +55,10 @@ function NavLinks({ isAdmin, onNavigate }: { isAdmin: boolean; onNavigate?: () =
   return (
     <nav className="flex flex-1 flex-col gap-1 px-3">
       {MAIN.map(link)}
-      {isAdmin ? (
+      {admin.length ? (
         <>
           <div className="mt-6 mb-1 px-3 text-[11px] font-semibold tracking-wider text-sidebar-muted uppercase">Administration</div>
-          {ADMIN.map(link)}
+          {admin.map(link)}
         </>
       ) : null}
       <div className="mt-auto pb-4">{link({ href: "/account", label: "My account", icon: UserCog })}</div>
@@ -66,16 +75,16 @@ function Brand({ firm, portal, logoUrl }: { firm: string; portal: string; logoUr
   );
 }
 
-export function AppSidebar({ isAdmin, firm, portal, logoUrl }: { isAdmin: boolean; firm: string; portal: string; logoUrl: string | null }) {
+export function AppSidebar({ access, firm, portal, logoUrl }: { access: NavAccess; firm: string; portal: string; logoUrl: string | null }) {
   return (
     <aside className="sticky top-0 hidden h-dvh w-64 shrink-0 flex-col bg-sidebar text-sidebar-foreground border-r lg:flex">
       <Brand firm={firm} portal={portal} logoUrl={logoUrl} />
-      <NavLinks isAdmin={isAdmin} />
+      <NavLinks access={access} />
     </aside>
   );
 }
 
-export function MobileNav({ isAdmin, firm, portal, logoUrl }: { isAdmin: boolean; firm: string; portal: string; logoUrl: string | null }) {
+export function MobileNav({ access, firm, portal, logoUrl }: { access: NavAccess; firm: string; portal: string; logoUrl: string | null }) {
   return (
     <Sheet>
       <SheetTrigger className="rounded-md p-2 hover:bg-muted lg:hidden" aria-label="Open navigation">
@@ -84,7 +93,7 @@ export function MobileNav({ isAdmin, firm, portal, logoUrl }: { isAdmin: boolean
       <SheetContent side="left" className="flex bg-sidebar p-0 text-sidebar-foreground">
         <SheetTitle className="sr-only">Navigation</SheetTitle>
         <Brand firm={firm} portal={portal} logoUrl={logoUrl} />
-        <NavLinks isAdmin={isAdmin} />
+        <NavLinks access={access} />
       </SheetContent>
     </Sheet>
   );
