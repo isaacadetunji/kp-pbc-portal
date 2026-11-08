@@ -40,7 +40,7 @@ function Progress({
       aria-valuenow={Math.round(v)}
       aria-label={label}
       className={cn(
-        "relative w-full overflow-hidden rounded-full bg-[#e3e8ef]",
+        "relative w-full overflow-hidden rounded-full bg-[var(--progress-track)]",
         size === "sm" ? "h-1.5" : size === "lg" ? "h-2.5" : "h-2",
         className,
       )}

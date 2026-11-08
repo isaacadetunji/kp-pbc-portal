@@ -15,7 +15,7 @@ function Stat({
 }) {
   return (
     <Card className={cn("relative overflow-hidden", emphasis && "border-primary/25 ring-1 ring-primary/10")}>
-      {emphasis ? <span aria-hidden className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-brand-accent to-brand-blue" /> : null}
+      {emphasis ? <span aria-hidden className="absolute inset-x-0 top-0 h-0.5 bg-brand-blue" /> : null}
       <CardContent className="space-y-2.5 py-5">
         <div className="flex items-center justify-between gap-2">
           <div className="eyebrow">{label}</div>
@@ -160,14 +160,14 @@ export function ProgressPanel({
                       : `${f.accepted_items}/${f.applicable_items} · `}
                     <span className={cn("font-semibold", progressTextClass(f.pct_provided))}>{pct(f.pct_provided)}</span>
                   </div>
-                  <div className="relative col-span-full h-2 overflow-hidden rounded-full bg-[#e3e8ef]" role="img" aria-label={`${f.folder_name}: ${pct(f.pct_provided)} accepted, ${pct(f.pct_submitted)} submitted`}>
+                  <div className="relative col-span-full h-2 overflow-hidden rounded-full bg-[var(--progress-track)]" role="img" aria-label={`${f.folder_name}: ${pct(f.pct_provided)} accepted, ${pct(f.pct_submitted)} submitted`}>
                     <div className="absolute inset-y-0 left-0 rounded-full bg-[repeating-linear-gradient(135deg,#b9c4d2_0_3px,#cfd7e2_3px_6px)]" style={{ width: `${f.pct_submitted}%` }} />
                     <div className={cn("absolute inset-y-0 left-0 rounded-full", progressBarClass(f.pct_provided), f.pct_provided > 0 && "min-w-1.5")} style={{ width: `${f.pct_provided}%` }} />
                   </div>
                 </div>
               ))}
             <div className="flex flex-wrap gap-x-4 gap-y-1 border-t pt-3 text-xs text-muted-foreground">
-              <span className="flex items-center gap-1.5"><span className="h-2 w-4 rounded-full bg-gradient-to-r from-danger-bar via-warning-bar to-success-bar" /> Accepted (colour shows how far along)</span>
+              <span className="flex items-center gap-1.5"><span aria-hidden className="flex h-2 w-5 overflow-hidden rounded-full"><span className="flex-1 bg-danger-bar" /><span className="flex-1 bg-info-bar" /><span className="flex-1 bg-success-bar" /></span> Accepted (colour shows how far along)</span>
               <span className="flex items-center gap-1.5"><span className="h-2 w-4 rounded-full bg-[repeating-linear-gradient(135deg,#b9c4d2_0_3px,#cfd7e2_3px_6px)]" /> Submitted, awaiting review</span>
             </div>
           </CardContent>

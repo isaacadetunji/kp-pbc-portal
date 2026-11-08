@@ -42,8 +42,9 @@ function NavLinks({ access, onNavigate }: { access: NavAccess; onNavigate?: () =
         href={n.href}
         onClick={onNavigate}
         className={cn(
-          "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-sidebar-muted transition-colors hover:bg-sidebar-active hover:text-sidebar-foreground",
-          active && "bg-sidebar-active text-primary",
+          "relative flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-sidebar-muted transition-colors hover:bg-sidebar-active hover:text-sidebar-foreground",
+          active &&
+            "bg-sidebar-active font-semibold text-sidebar-foreground before:absolute before:top-1.5 before:bottom-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-brand-blue",
         )}
         aria-current={active ? "page" : undefined}
       >
@@ -68,9 +69,11 @@ function NavLinks({ access, onNavigate }: { access: NavAccess; onNavigate?: () =
 
 function Brand({ firm, portal, logoUrl }: { firm: string; portal: string; logoUrl: string | null }) {
   return (
-    <Link href="/dashboard" className="flex flex-col gap-1.5 px-5 pt-6 pb-5">
-      <BrandLogo logoUrl={logoUrl} firm={firm} className="h-6" />
-      <span className="text-xs font-medium tracking-wide text-sidebar-muted uppercase">{portal}</span>
+    <Link href="/dashboard" className="flex flex-col gap-2.5 px-5 pt-6 pb-5">
+      <span className="inline-flex w-fit rounded-md bg-white px-2.5 py-1.5 shadow-xs">
+        <BrandLogo logoUrl={logoUrl} firm={firm} className="h-6" />
+      </span>
+      <span className="text-[11px] font-semibold tracking-[0.08em] text-sidebar-muted uppercase">{portal}</span>
     </Link>
   );
 }
@@ -90,7 +93,7 @@ export function MobileNav({ access, firm, portal, logoUrl }: { access: NavAccess
       <SheetTrigger className="rounded-md p-2 hover:bg-muted lg:hidden" aria-label="Open navigation">
         <Menu className="size-5" />
       </SheetTrigger>
-      <SheetContent side="left" className="flex bg-sidebar p-0 text-sidebar-foreground">
+      <SheetContent side="left" className="flex bg-sidebar p-0 text-sidebar-foreground [&>button:last-child]:text-sidebar-muted [&>button:last-child]:hover:bg-sidebar-active [&>button:last-child]:hover:text-sidebar-foreground">
         <SheetTitle className="sr-only">Navigation</SheetTitle>
         <Brand firm={firm} portal={portal} logoUrl={logoUrl} />
         <NavLinks access={access} />

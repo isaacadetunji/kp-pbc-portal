@@ -2,25 +2,41 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { CalendarDays, ChevronDown, ChevronRight, MessageSquare, Paperclip, Search, ShieldAlert, UserCheck } from "lucide-react";
+import { CalendarDays, ChevronDown, ChevronRight, MessageSquare, Paperclip, Search, ShieldAlert, UserCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CriticalBadge, ItemStatusBadge } from "@/components/status-badge";
 import { ItemDetailSheet } from "@/components/items/item-detail-sheet";
 import { AssigneeAvatars, LockBadge } from "@/components/items/assignees";
-import { fmtDate, isOverdue } from "@/lib/dates";
+import { fmtDate, fmtRequested, isOverdue, requestedDate } from "@/lib/dates";
 import type { EngagementProgress, EngagementStatus, Folder, ItemAssignee, Person, RequestItem } from "@/lib/types";
 import { progressTextClass } from "@/lib/progress";
 import { cn, pct } from "@/lib/utils";
 
-type View = "todo" | "submitted" | "complete" | "all";
+type View = "todo" | "submitted" | "queried" | "complete" | "all";
+// Outstanding = still to provide (requested only); Queried = action needed, shown
+// as its own tab so queried items are not double-counted under Outstanding.
 const VIEWS: { key: View; label: string; match: (i: RequestItem) => boolean }[] = [
-  { key: "todo", label: "Outstanding", match: (i) => i.status === "requested" || i.status === "queried" },
+  { key: "todo", label: "Outstanding", match: (i) => i.status === "requested" },
   { key: "submitted", label: "Submitted", match: (i) => i.status === "submitted" || i.status === "under_review" },
+  { key: "queried", label: "Queried", match: (i) => i.status === "queried" },
   { key: "complete", label: "Complete", match: (i) => i.status === "accepted" || i.status === "not_applicable" },
   { key: "all", label: "All", match: () => true },
 ];
+
+const ALL_FOLDERS = "__all";
+type Sort = "due" | "requested" | "status";
+const SORTS: { key: Sort; label: string }[] = [
+  { key: "due", label: "Due date" },
+  { key: "requested", label: "Request date" },
+  { key: "status", label: "Status" },
+];
+// Order used when sorting by status (most-actionable first).
+const STATUS_RANK: Record<RequestItem["status"], number> = {
+  queried: 0, requested: 1, submitted: 2, under_review: 3, accepted: 4, not_applicable: 5,
+};
 
 export function PortalRequestList({
   engagementId, engagementStatus, items, folders, team, clientUsers = [], assignees = {}, progress, fileCounts, commentCounts, userId, upload,
@@ -42,9 +58,13 @@ export function PortalRequestList({
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
-  const todoCount = items.filter(VIEWS[0]!.match).length;
-  const [view, setView] = useState<View>(todoCount > 0 ? "todo" : "all");
+  const todoCount = items.filter(VIEWS[0]!.match).length; // Outstanding (requested)
+  const queriedCount = items.filter((i) => i.status === "queried").length;
+  const actionNeeded = todoCount + queriedCount; // everything still needing the client
+  const [view, setView] = useState<View>(todoCount > 0 ? "todo" : queriedCount > 0 ? "queried" : "all");
   const [q, setQ] = useState("");
+  const [folderFilter, setFolderFilter] = useState<string>(ALL_FOLDERS);
+  const [sort, setSort] = useState<Sort>("due");
   const [mineOnly, setMineOnly] = useState(false);
   const people = useMemo(() => new Map<string, Person>([...team, ...clientUsers].map((p) => [p.id, p])), [team, clientUsers]);
   const isMine = (i: RequestItem) => (assignees[i.id] ?? []).some((a) => a.user_id === userId);
@@ -63,17 +83,32 @@ export function PortalRequestList({
   }
 
   const match = VIEWS.find((v) => v.key === view)!.match;
+  const sortItems = (rows: RequestItem[]) => {
+    const cmp = (a: RequestItem, b: RequestItem) => {
+      if (sort === "status") return STATUS_RANK[a.status] - STATUS_RANK[b.status];
+      const key = sort === "due" ? (i: RequestItem) => i.due_date : (i: RequestItem) => requestedDate(i);
+      const av = key(a);
+      const bv = key(b);
+      if (!av && !bv) return 0;
+      if (!av) return 1; // missing dates sort last
+      if (!bv) return -1;
+      return av.localeCompare(bv); // ascending: soonest due / oldest request first
+    };
+    return [...rows].sort((a, b) => cmp(a, b) || a.sort_order - b.sort_order || a.code.localeCompare(b.code));
+  };
+  const filtersActive = q.trim() !== "" || folderFilter !== ALL_FOLDERS || sort !== "due" || mineOnly;
   const groups = useMemo(() => {
     const n = q.trim().toLowerCase();
     return folders
+      .filter((f) => folderFilter === ALL_FOLDERS || f.id === folderFilter)
       .map((f) => ({
         folder: f,
-        items: items.filter((i) => i.folder_id === f.id && match(i) && (!mineOnly || isMine(i)) && (!n || `${i.code} ${i.title}`.toLowerCase().includes(n))),
+        items: sortItems(items.filter((i) => i.folder_id === f.id && match(i) && (!mineOnly || isMine(i)) && (!n || `${i.code} ${i.title}`.toLowerCase().includes(n)))),
         all: items.filter((i) => i.folder_id === f.id),
       }))
       .filter((g) => g.items.length > 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [folders, items, match, q, mineOnly, assignees, userId]);
+  }, [folders, items, match, q, folderFilter, sort, mineOnly, assignees, userId]);
 
   const open = items.find((i) => i.id === openId) ?? null;
   const critical = items.filter((i) => i.is_critical && !i.is_waived && (i.status === "requested" || i.status === "queried"));
@@ -94,8 +129,11 @@ export function PortalRequestList({
         </div>
         <div className={cn("flex flex-col justify-center rounded-xl border px-4 py-3", progress?.overdue_items ? "border-danger/15 bg-danger-soft/60" : "bg-muted/50")}>
           <div className="text-xs font-medium text-muted-foreground">Still needed from you</div>
-          <div className="font-display text-[28px] leading-9 font-bold tabular">{todoCount}</div>
-          {progress?.overdue_items ? <div className="text-xs font-semibold text-danger">{progress.overdue_items} overdue</div> : null}
+          <div className="font-display text-[28px] leading-9 font-bold tabular">{actionNeeded}</div>
+          <div className="flex flex-wrap gap-x-2 text-xs">
+            {queriedCount ? <span className="font-semibold text-warning">{queriedCount} queried</span> : null}
+            {progress?.overdue_items ? <span className="font-semibold text-danger">{progress.overdue_items} overdue</span> : null}
+          </div>
         </div>
       </div>
 
@@ -122,8 +160,8 @@ export function PortalRequestList({
         </div>
       ) : null}
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <div className="flex gap-1 overflow-x-auto rounded-lg border bg-muted/70 p-[3px]" role="tablist">
+      <div className="space-y-3">
+        <div className="flex gap-1 overflow-x-auto rounded-lg border bg-muted/70 p-[3px]" role="tablist" aria-label="Filter requests by status">
           {VIEWS.map((v) => {
             const count = items.filter(v.match).length;
             return (
@@ -139,20 +177,42 @@ export function PortalRequestList({
             );
           })}
         </div>
-        <div className="relative flex-1">
-          <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search requests" className="pl-9" aria-label="Search requests" />
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-0 flex-[1_1_14rem]">
+            <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search code or title" className="pl-9" aria-label="Search requests" />
+          </div>
+          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
+            <Select value={folderFilter} onValueChange={setFolderFilter}>
+              <SelectTrigger className="sm:w-44" aria-label="Filter by section"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_FOLDERS}>All sections</SelectItem>
+                {folders.map((f) => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={sort} onValueChange={(v) => setSort(v as Sort)}>
+              <SelectTrigger className="sm:w-40" aria-label="Sort requests"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {SORTS.map((s) => <SelectItem key={s.key} value={s.key}>Sort: {s.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant={mineOnly ? "default" : "outline"}
+            className="h-9"
+            aria-pressed={mineOnly}
+            onClick={() => setMineOnly((v) => !v)}
+          >
+            <UserCheck /> Assigned to me <span className="text-xs tabular opacity-70">{mineCount}</span>
+          </Button>
+          {filtersActive ? (
+            <Button type="button" variant="ghost" size="sm" className="h-9" onClick={() => { setQ(""); setFolderFilter(ALL_FOLDERS); setSort("due"); setMineOnly(false); }}>
+              <X /> Clear
+            </Button>
+          ) : null}
         </div>
-        <Button
-          type="button"
-          size="sm"
-          variant={mineOnly ? "default" : "outline"}
-          className="h-9"
-          aria-pressed={mineOnly}
-          onClick={() => setMineOnly((v) => !v)}
-        >
-          <UserCheck /> Assigned to me <span className="text-xs tabular opacity-70">{mineCount}</span>
-        </Button>
       </div>
 
       {groups.length === 0 ? (
@@ -197,6 +257,7 @@ export function PortalRequestList({
                                 <CalendarDays className="size-3" /> {overdue ? "Overdue · " : "Due "}{fmtDate(i.due_date)}
                               </span>
                             ) : null}
+                            {fmtRequested(i) ? <span className="tabular text-subtle-foreground">{fmtRequested(i)}</span> : null}
                             {fileCounts[i.id] ? <span className="flex items-center gap-1"><Paperclip className="size-3" />{fileCounts[i.id]}</span> : null}
                             {commentCounts[i.id] ? <span className="flex items-center gap-1"><MessageSquare className="size-3" />{commentCounts[i.id]}</span> : null}
                             {assignees[i.id]?.length ? <AssigneeAvatars assignees={assignees[i.id]} people={people} /> : null}

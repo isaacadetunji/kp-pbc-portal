@@ -24,7 +24,7 @@ import { AssigneeAvatars, LockBadge, selectionFrom, type PersonWithRole } from "
 import { FILE_CLASS } from "@/lib/checklist-constants";
 import { createClient } from "@/lib/supabase/client";
 import { ITEM_STATUS, ITEM_STATUS_ORDER, PRIORITY, PRIORITY_ORDER } from "@/lib/constants";
-import { fmtDate, isOverdue } from "@/lib/dates";
+import { fmtDate, fmtRequested, isOverdue } from "@/lib/dates";
 import type { EngagementStatus, Folder, ItemAssignee, ItemStatus, Person, RequestItem } from "@/lib/types";
 import { cn, friendlyError } from "@/lib/utils";
 
@@ -514,7 +514,7 @@ export function RequestList({
                   <ul className="divide-y">
                     <li aria-hidden className="hidden items-center gap-3 bg-card px-3 py-1.5 md:flex">
                       <span className="w-4 shrink-0" />
-                      <span className="eyebrow grid flex-1 gap-3 text-[10px] text-subtle-foreground md:grid-cols-[5.5rem_minmax(0,1fr)_8.5rem_7rem_6.5rem_4.5rem]">
+                      <span className="eyebrow grid flex-1 gap-3 text-[10px] text-subtle-foreground md:grid-cols-[5.5rem_minmax(0,1fr)_8rem_6.5rem_7.5rem_4rem]">
                         <span>Code</span><span>Request</span><span>Status</span><span>Assigned</span><span>Due</span><span>Activity</span>
                       </span>
                     </li>
@@ -524,7 +524,7 @@ export function RequestList({
                       return (
                         <li key={i.id} className={cn("flex items-start gap-3 px-3 py-3 transition-colors hover:bg-accent/30 md:items-center", selected.has(i.id) && "bg-accent/60 hover:bg-accent/60")}>
                           <Checkbox className="mt-1 md:mt-0" checked={selected.has(i.id)} onCheckedChange={() => toggle(i.id)} aria-label={`Select ${i.code}`} />
-                          <button className="grid min-w-0 flex-1 gap-1 text-left md:grid-cols-[5.5rem_minmax(0,1fr)_8.5rem_7rem_6.5rem_4.5rem] md:items-center md:gap-3" onClick={() => setItemParam(i.id)}>
+                          <button className="grid min-w-0 flex-1 gap-1 text-left md:grid-cols-[5.5rem_minmax(0,1fr)_8rem_6.5rem_7.5rem_4rem] md:items-center md:gap-3" onClick={() => setItemParam(i.id)}>
                             <span className="font-mono text-[11px] font-medium text-muted-foreground">{i.code}</span>
                             <span className="min-w-0">
                               <span className="flex min-w-0 items-center gap-1.5">
@@ -557,8 +557,11 @@ export function RequestList({
                             <span className="hidden items-center gap-2 text-xs md:flex">
                               <AssigneeAvatars assignees={rowAssignees} people={people} />
                             </span>
-                            <span className={cn("text-xs tabular", overdue ? "font-semibold text-danger" : "text-muted-foreground")}>
-                              {i.due_date ? `${overdue ? "Overdue · " : ""}${fmtDate(i.due_date, "d MMM yy")}` : "No due date"}
+                            <span className="flex flex-col gap-0.5 text-xs tabular">
+                              <span className={cn(overdue ? "font-semibold text-danger" : "text-muted-foreground")}>
+                                {i.due_date ? `${overdue ? "Overdue · Due " : "Due "}${fmtDate(i.due_date, "d MMM yy")}` : "No due date"}
+                              </span>
+                              {fmtRequested(i) ? <span className="text-subtle-foreground">{fmtRequested(i)}</span> : null}
                             </span>
                             <span className="hidden items-center gap-3 text-xs text-muted-foreground md:flex">
                               <span className="flex items-center gap-1" title="Submitted files"><Paperclip className="size-3.5" />{fileCounts[i.id] ?? 0}</span>

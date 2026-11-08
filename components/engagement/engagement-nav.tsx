@@ -16,7 +16,7 @@ export function engagementLabel(e: Pick<NavEngagement, "period_end" | "type_name
 function MiniBar({ value, label }: { value: number; label: string }) {
   const v = Math.max(0, Math.min(100, value));
   return (
-    <span className="block h-1.5 w-full overflow-hidden rounded-full bg-[#e3e8ef]" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(v)} aria-label={label}>
+    <span className="block h-1.5 w-full overflow-hidden rounded-full bg-[var(--progress-track)]" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(v)} aria-label={label}>
       <span className={cn("block h-full rounded-full", progressBarClass(v), v > 0 && "min-w-1.5")} style={{ width: `${v}%` }} />
     </span>
   );

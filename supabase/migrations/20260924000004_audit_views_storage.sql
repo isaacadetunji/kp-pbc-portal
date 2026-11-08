@@ -174,7 +174,7 @@ end $$;
 -- Default settings
 -- -----------------------------------------------------------------------------
 insert into public.app_settings (key, value) values
-  ('brand', '{"firm_name":"Kreston Pedabo","portal_name":"PBC Portal","primary":"#0F77AD","accent":"#43BBC7","logo_url":"/kreston-pedabo-logo.png"}'),
+  ('brand', '{"firm_name":"Kreston Pedabo","portal_name":"Kreston Pedabo Bridge","product_short":"Bridge","primary":"#0F77AD","accent":"#43BBC7","logo_url":"/kreston-pedabo-logo.png"}'),
   ('uploads.max_file_mb', '100'),
   ('uploads.allowed_extensions', '["pdf","xls","xlsx","xlsm","csv","doc","docx","jpg","jpeg","png","heic","zip"]'),
   ('security.mfa_required_for_staff', 'false')

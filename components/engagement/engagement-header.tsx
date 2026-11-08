@@ -38,7 +38,7 @@ export function StageStepper({ status, className }: { status: Engagement["status
                   aria-hidden
                   className={cn(
                     "mx-2.5 h-0.5 min-w-6 flex-1 rounded-full sm:mx-3",
-                    i < current || done ? "bg-success-bar" : i === current ? "bg-gradient-to-r from-success-bar to-primary" : "bg-border-strong/70",
+                    i < current || done ? "bg-success-bar" : i === current ? "bg-primary" : "bg-border-strong/70",
                   )}
                 />
               ) : null}

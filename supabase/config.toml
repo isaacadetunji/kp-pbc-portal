@@ -61,13 +61,13 @@ timebox = "12h"
 
 # Email links go to /auth/confirm with a token hash (works with server-side auth)
 [auth.email.template.invite]
-subject = "You've been invited to the Kreston Pedabo PBC Portal"
+subject = "You've been invited to Kreston Pedabo Bridge"
 content_path = "./supabase/templates/invite.html"
 
 [auth.email.template.magic_link]
-subject = "Your PBC Portal sign-in link"
+subject = "Your Kreston Pedabo Bridge sign-in link"
 content_path = "./supabase/templates/magic_link.html"
 
 [auth.email.template.recovery]
-subject = "Reset your PBC Portal password"
+subject = "Reset your Kreston Pedabo Bridge password"
 content_path = "./supabase/templates/recovery.html"
