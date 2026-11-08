@@ -70,8 +70,12 @@ export function SettingsForm({
             <Input id="s-firm" value={b.firm_name} onChange={(e) => setB({ ...b, firm_name: e.target.value })} />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="s-portal">Portal name</Label>
-            <Input id="s-portal" value={b.portal_name} onChange={(e) => setB({ ...b, portal_name: e.target.value })} />
+            <Label htmlFor="s-portal">Product name</Label>
+            <Input id="s-portal" value={b.portal_name} onChange={(e) => setB({ ...b, portal_name: e.target.value })} placeholder="Kreston Pedabo Bridge" />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="s-short">Short name</Label>
+            <Input id="s-short" value={b.product_short ?? ""} onChange={(e) => setB({ ...b, product_short: e.target.value })} placeholder="Bridge" />
           </div>
           {(["primary", "accent"] as const).map((k) => (
             <div key={k} className="space-y-1.5">

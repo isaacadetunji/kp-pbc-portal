@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { BrandLogo } from "@/components/brand-logo";
 import { NotificationBell } from "@/components/notification-bell";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { UserMenu } from "@/components/user-menu";
 import { getStageLabels, requireClient } from "@/lib/auth";
 import { StageLabelsProvider } from "@/components/stage-labels";
@@ -12,14 +13,15 @@ export default async function PortalLayout({ children }: { children: React.React
   return (
     <StageLabelsProvider labels={labels}>
     <div className="flex min-h-dvh flex-col">
-      <header className="sticky top-0 z-30 border-b bg-card/95 backdrop-blur">
-        <div className="h-1 bg-gradient-to-r from-brand-accent to-brand-blue" />
-        <div className="mx-auto flex h-14 w-full max-w-6xl items-center gap-3 px-4">
+      <header className="sticky top-0 z-30 border-b bg-card">
+        <div className="h-0.5 bg-brand-blue" />
+        <div className="mx-auto flex h-14 w-full max-w-6xl items-center gap-2 px-4">
           <Link href="/portal" className="flex items-center gap-3">
             <BrandLogo logoUrl={brand.logo_url} firm={brand.firm_name} className="h-5 sm:h-6" />
-            <span className="hidden border-l pl-3 text-xs font-medium tracking-wide text-muted-foreground uppercase sm:inline">{brand.portal_name}</span>
+            <span className="hidden border-l pl-3 text-xs font-semibold tracking-wide text-muted-foreground uppercase sm:inline">{brand.portal_name}</span>
           </Link>
           <div className="flex-1" />
+          <ThemeToggle />
           <NotificationBell userId={profile.id} allHref="/portal/notifications" />
           <UserMenu name={profile.full_name} email={profile.email} role="Client" accountHref="/portal/account" />
         </div>
