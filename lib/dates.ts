@@ -35,3 +35,14 @@ export function fromNow(d: string | null | undefined): string {
   if (!d) return "";
   return `${formatDistanceToNowStrict(new Date(d))} ago`;
 }
+
+/** The date a request was made to the client: issued_at when released, else created_at. */
+export function requestedDate(item: { issued_at?: string | null; created_at?: string | null }): string | null {
+  return item.issued_at ?? item.created_at ?? null;
+}
+
+/** "Requested 12 Oct" (empty when neither date is set). */
+export function fmtRequested(item: { issued_at?: string | null; created_at?: string | null }): string {
+  const d = requestedDate(item);
+  return d ? `Requested ${fmtDate(d, "d MMM")}` : "";
+}

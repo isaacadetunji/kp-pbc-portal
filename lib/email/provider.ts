@@ -33,7 +33,7 @@ export function emailConfig() {
   const provider: "resend" | "log" = raw === "resend" ? "resend" : raw === "log" ? "log" : resendKey ? "resend" : "log";
   return {
     provider,
-    from: process.env.EMAIL_FROM || "Kreston Pedabo PBC Portal <pbc@example.com>",
+    from: process.env.EMAIL_FROM || "Kreston Pedabo Bridge <pbc@example.com>",
     replyTo: process.env.EMAIL_REPLY_TO || null,
     resendKey,
     smtpUrl: process.env.SMTP_URL || null,

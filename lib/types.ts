@@ -150,6 +150,8 @@ export interface RequestItem {
   issued_at: string | null;
   last_submitted_at: string | null;
   accepted_at: string | null;
+  /** When the item was created (fallback for the "Requested" date before release). */
+  created_at?: string | null;
   updated_at: string;
   /** Locked: only assignees (plus partners, the lead, managers and the creator) can see it. */
   is_locked: boolean;

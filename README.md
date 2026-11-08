@@ -1,8 +1,14 @@
-# Kreston Pedabo PBC Portal
+# Kreston Pedabo Bridge
 
 A secure web platform for Prepared-By-Client (PBC) information requests. The firm issues a structured request list per engagement, clients upload against each item from any device, and the engagement team reviews, queries and tracks completion in real time. It replaces Excel PBC trackers and email back-and-forth.
 
+The product is **Kreston Pedabo Bridge** (short form **Bridge**); the firm remains Kreston Pedabo. The product name is branding (`app_settings.brand.portal_name` / `product_short`) and is editable in Settings → General.
+
 **Status: Phase 1 complete, plus 1.1 and the 1.2 engagement workspace.** See [Roadmap](#roadmap) for Phases 2 and 3.
+
+**Appearance.** The UI ships a calm, data-dense corporate theme with a light and a dark mode. The theme switch (light / dark / system) is in the top bar and defaults to following the operating system; the choice is stored in a `theme` cookie (so the server and a before-paint inline script agree and there is no flash) and mirrored to `localStorage`. All colours are CSS tokens in `app/globals.css` (`:root` for light, `.dark` for dark), so both themes stay in sync.
+
+**Request list.** Every request row (team and client) shows the date the request was made ("Requested 12 Oct", from `issued_at`, else `created_at`) next to the due date. The client portal list has a search / section-filter / sort bar and status tabs **Outstanding · Submitted · Queried · Complete · All** — Outstanding is `requested` only; queried items live under their own Queried tab.
 
 | | |
 |---|---|
@@ -195,7 +201,7 @@ Emails sent locally (invitations, magic links) appear in Inbucket at http://loca
 
 **3. Notification e-mails and the scheduler**
 
-1. E-mail provider: set `EMAIL_PROVIDER=resend`, `RESEND_API_KEY` and `EMAIL_FROM` (an address on a domain verified in Resend, e.g. `Kreston Pedabo PBC Portal <pbc@krestonpedabo.com>`). Optional `EMAIL_REPLY_TO`. With `EMAIL_PROVIDER=log` (development) messages are written to the server log, and also sent over plain SMTP to `SMTP_URL` if set (e.g. `smtp://localhost:54325`, the local Supabase Inbucket, so they show at http://localhost:54324).
+1. E-mail provider: set `EMAIL_PROVIDER=resend`, `RESEND_API_KEY` and `EMAIL_FROM` (an address on a domain verified in Resend, e.g. `Kreston Pedabo Bridge <pbc@krestonpedabo.com>`). Optional `EMAIL_REPLY_TO`. With `EMAIL_PROVIDER=log` (development) messages are written to the server log, and also sent over plain SMTP to `SMTP_URL` if set (e.g. `smtp://localhost:54325`, the local Supabase Inbucket, so they show at http://localhost:54324).
 2. Set `CRON_SECRET` (e.g. `openssl rand -hex 32`) in the app's environment. `POST /api/cron/dispatch` with `Authorization: Bearer $CRON_SECRET` sends pending instant e-mails and the reminders due now. It returns a JSON summary.
 3. Schedule it hourly with **one** of:
    - **Netlify**: `netlify/functions/dispatch.mts` is a scheduled function (`@hourly`). It uses the site `URL` (or `SITE_URL`) and the same `CRON_SECRET`. It runs on published deploys only.

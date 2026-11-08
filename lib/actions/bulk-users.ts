@@ -239,7 +239,7 @@ export async function bulkStaffTemplate(): Promise<ActionResult<{ fileName: stri
     const { profile } = await bulkUser();
     const roles = profile.app_role === "super_admin" ? ["Staff", "Admin", "Super admin"] : ["Staff"];
     const wb = new ExcelJS.Workbook();
-    wb.creator = "PBC Portal";
+    wb.creator = "Kreston Pedabo Bridge";
     const ws = wb.addWorksheet("Staff");
     ws.columns = [
       { header: "Full name", key: "name", width: 30 },

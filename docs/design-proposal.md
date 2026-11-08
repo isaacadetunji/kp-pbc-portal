@@ -1,4 +1,4 @@
-# Kreston Pedabo PBC Portal — Design Proposal (for confirmation before Phase 1)
+# Kreston Pedabo Bridge — Design Proposal (for confirmation before Phase 1)
 
 Version 0.1 · 24 Sep 2026 · Prepared for Isaac Adetunji
 

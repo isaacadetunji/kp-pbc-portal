@@ -56,12 +56,12 @@ export const REQUEST_IN_PROGRESS = "Request in progress";
 export const REQUEST_IN_PROGRESS_MESSAGE = "Your engagement team is preparing the request list. You'll be notified when it is released.";
 
 export const EVENT_KIND: Record<EventKind, { label: string; dot: string; chip: string }> = {
-  deadline: { label: "Deadline", dot: "bg-destructive", chip: "bg-danger-soft text-destructive" },
-  filing: { label: "Regulatory filing", dot: "bg-violet-600", chip: "bg-violet-100 text-violet-800" },
-  meeting: { label: "Meeting", dot: "bg-indigo-500", chip: "bg-indigo-50 text-indigo-800" },
-  milestone: { label: "Milestone", dot: "bg-emerald-600", chip: "bg-emerald-50 text-emerald-800" },
-  client_request: { label: "Client request", dot: "bg-warning", chip: "bg-warning-soft text-warning" },
-  other: { label: "Other", dot: "bg-muted-foreground", chip: "bg-muted text-foreground" },
+  deadline: { label: "Deadline", dot: "bg-danger-bar", chip: "bg-danger-soft text-danger" },
+  filing: { label: "Regulatory filing", dot: "bg-info-bar", chip: "bg-info-soft text-info" },
+  meeting: { label: "Meeting", dot: "bg-[var(--review)]", chip: "bg-review-soft text-review" },
+  milestone: { label: "Milestone", dot: "bg-success-bar", chip: "bg-success-soft text-success" },
+  client_request: { label: "Client request", dot: "bg-warning-bar", chip: "bg-warning-soft text-warning" },
+  other: { label: "Other", dot: "bg-neutral", chip: "bg-neutral-soft text-neutral" },
 };
 export const EVENT_KIND_ORDER: EventKind[] = ["deadline", "filing", "meeting", "milestone", "client_request", "other"];
 

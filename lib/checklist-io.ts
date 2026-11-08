@@ -107,7 +107,7 @@ export function rowsToCsv(rows: ChecklistRow[]): string {
 
 export async function rowsToXlsx(rows: ChecklistRow[], categoryCodes: string[] = []): Promise<ArrayBuffer> {
   const wb = new ExcelJS.Workbook();
-  wb.creator = "PBC Portal";
+  wb.creator = "Kreston Pedabo Bridge";
   const ws = wb.addWorksheet("Master checklist");
   ws.columns = CHECKLIST_COLUMNS.map((c) => ({
     header: c,

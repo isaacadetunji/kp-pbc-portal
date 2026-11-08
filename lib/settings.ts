@@ -8,7 +8,10 @@ import { DEFAULT_ALLOWED_EXTENSIONS } from "@/lib/constants";
 
 export interface BrandSettings {
   firm_name: string;
+  /** Product name shown as the wordmark and in titles (e.g. "Kreston Pedabo Bridge"). */
   portal_name: string;
+  /** Short product name ("Bridge"). */
+  product_short: string;
   primary: string;
   accent: string;
   logo_url: string | null;
@@ -16,7 +19,8 @@ export interface BrandSettings {
 
 const DEFAULT_BRAND: BrandSettings = {
   firm_name: process.env.NEXT_PUBLIC_FIRM_NAME ?? "Kreston Pedabo",
-  portal_name: "PBC Portal",
+  portal_name: "Kreston Pedabo Bridge",
+  product_short: "Bridge",
   primary: "#0F77AD",
   accent: "#43BBC7",
   logo_url: "/kreston-pedabo-logo.png",
