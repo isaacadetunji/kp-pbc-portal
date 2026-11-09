@@ -24,7 +24,8 @@ import { removeDraftFile } from "@/lib/actions/uploads";
 import { createClient } from "@/lib/supabase/client";
 import { fmtDate, fmtDateTime, isOverdue } from "@/lib/dates";
 import { ITEM_STATUS } from "@/lib/constants";
-import type { EngagementStatus, Folder, ItemAssignee, ItemFile, ItemStatus, Person, RequestItem, ReviewAction, StatusHistory } from "@/lib/types";
+import { TEAM_RANK } from "@/lib/constants";
+import type { EngagementStatus, Folder, ItemAssignee, ItemFile, ItemStatus, Person, RequestItem, ReviewAction, StatusHistory, TeamRole } from "@/lib/types";
 import { cn, formatBytes, friendlyError } from "@/lib/utils";
 
 const OPEN_ENGAGEMENT: EngagementStatus[] = ["pre_engagement", "acceptance_review", "accepted", "in_progress"];
@@ -40,6 +41,21 @@ export interface ItemPerms {
   isLead: boolean;
   /** On the engagement team (or Super admin): may work on items. Viewers are read-only. */
   isTeam?: boolean;
+  /** Current user's team role on this engagement (null if not on the team). */
+  teamRole?: TeamRole | null;
+  isSuperAdmin?: boolean;
+}
+
+/** Can this user lock / unlock / reassign a (possibly locked) item? Mirrors the
+ *  DB seniority rule (public.team_rank / user_can_modify_locked_item); the
+ *  database is the security boundary — this only drives what the UI offers. */
+export function lockRights(perms: ItemPerms, item: Pick<RequestItem, "is_locked" | "locked_by">, team: PersonWithRole[], userId: string) {
+  const myRank = perms.isSuperAdmin ? 99 : perms.teamRole ? TEAM_RANK[perms.teamRole] : 0;
+  const lockerRole = item.locked_by ? team.find((t) => t.id === item.locked_by)?.team_role ?? null : null;
+  const lockerRank = item.locked_by ? (lockerRole ? TEAM_RANK[lockerRole] : 1) : 1;
+  const canLock = perms.isSuperAdmin || myRank >= 2; // partner/manager/lead only
+  const canModifyLocked = Boolean(perms.isSuperAdmin || item.locked_by === userId || myRank > lockerRank);
+  return { canLock, canModifyLocked, canToggle: item.is_locked ? canModifyLocked : canLock };
 }
 
 type NoteAction = { action: ReviewAction | "waive"; title: string; description: string; required: boolean; cta: string } | null;
@@ -139,10 +155,11 @@ export function ItemDetailSheet({
   const it = current;
   const people = new Map<string, Person>([...team, ...clientUsers].map((t) => [t.id, t]));
   const isTeam = audience === "team" && (perms.isTeam ?? true);
-  // Who may change assignees / the lock (mirrors set_request_item_assignees; the database decides)
-  const canFirm = audience === "team" && (it.is_locked ? perms.canManage : isTeam);
-  const canClient = audience === "team" ? (it.is_locked ? perms.canManage : Boolean(perms.canEdit ?? perms.canManage)) : !it.is_locked;
-  const canLock = audience === "team" && (perms.canManage || (it.created_by === userId && isTeam));
+  // Who may change assignees / the lock (mirrors the DB seniority rule; the database decides)
+  const rights = lockRights(perms, it, team, userId);
+  const canFirm = audience === "team" && (it.is_locked ? rights.canModifyLocked : isTeam);
+  const canClient = audience === "team" ? (it.is_locked ? rights.canModifyLocked : Boolean(perms.canEdit ?? perms.canManage)) : !it.is_locked;
+  const canLock = audience === "team" && rights.canToggle;
   const assignValue = assignDraft ?? selectionFrom(assigneeRows);
   const assignDirty = assignDraft !== null;
   const folder = folders.find((f) => f.id === it.folder_id);
@@ -231,7 +248,7 @@ export function ItemDetailSheet({
     const { error } = await supabase.rpc("set_request_item_lock", { p_item_id: it.id, p_locked: on });
     setBusy(false);
     if (error) return toast.error(friendlyError(error));
-    toast.success(on ? "Request locked: only the people assigned (plus the partner, team lead and managers) can see it" : "Request unlocked");
+    toast.success(on ? "Request locked — visible to its assignees and anyone more senior than you" : "Request unlocked");
     refreshAll();
   }
 
@@ -364,7 +381,7 @@ export function ItemDetailSheet({
             {it.is_critical ? <CriticalBadge waived={it.is_waived} audience={audience} /> : null}
             {audience === "team" && !(it.is_critical && it.priority === "important") ? <PriorityBadge priority={it.priority} /> : null}
             {it.file_class ? <Badge variant="outline">{FILE_CLASS[it.file_class].label}</Badge> : null}
-            {it.is_locked ? <Badge variant="secondary"><Lock /> Locked</Badge> : null}
+            {it.is_locked ? <Badge variant="steel" title={audience === "team" ? "Locked — visible to assignees and seniors" : "Locked — visible only to the people assigned"}><Lock /> Locked</Badge> : null}
             {overdue ? <Badge variant="danger">Overdue</Badge> : null}
           </div>
           <SheetTitle className="text-lg leading-snug">{it.title}</SheetTitle>
@@ -421,7 +438,9 @@ export function ItemDetailSheet({
               </div>
               {it.is_locked ? (
                 <p className="text-xs text-muted-foreground">
-                  Locked: only the people assigned{audience === "team" ? " (plus the partner, team lead and managers)" : ""} can see this request.
+                  {audience === "team"
+                    ? "Locked — visible to its assignees, the person who locked it and anyone more senior than them."
+                    : "Locked — visible only to the people assigned to it."}
                 </p>
               ) : null}
               {(canFirm || canClient) && engagementStatus !== "archived" ? (

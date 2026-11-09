@@ -52,9 +52,12 @@ export default async function EngagementPage({
     getPermissions(),
     loadClientUsers(supabase, id),
   ]);
-  const tabs = ALL_TABS.filter((t) => t.key !== "settings" || canManage);
+  // Settings is open to any team member (they can switch the client there); the
+  // non-client settings inside are still gated on canManage.
+  const tabs = ALL_TABS.filter((t) => t.key !== "settings" || isTeam);
   const tab = tabs.some((t) => t.key === tabParam) ? tabParam! : "requests";
-  const perms = { canManage, canAccept, isLead, canEdit, isTeam };
+  const myTeamRole = team.find((t) => t.id === profile.id)?.team_role ?? null;
+  const perms = { canManage, canAccept, isLead, canEdit, isTeam, teamRole: myTeamRole, isSuperAdmin: appPerms.isSuperAdmin };
   const criticalOpen = items.filter((i) => i.is_critical && !i.is_waived && i.status !== "accepted").length;
   const openItems = items.filter((i) => !i.is_waived && i.status !== "accepted" && i.status !== "not_applicable").length;
   const allowed = upload.allowedExtensions;
@@ -178,7 +181,21 @@ export default async function EngagementPage({
     const rows = await loadAttachments(supabase, id, "client");
     content = <AttachmentsPanel engagementId={id} side="client" rows={rows.map(publicAttachment)} itemHref={`${base}?tab=requests`} />;
   } else {
-    content = <EngagementSettings engagement={engagement} canManage={canManage} firmMaxMb={upload.maxFileMb} />;
+    const { data: clientRows } = await supabase
+      .from("clients")
+      .select("id, name, external_id, source")
+      .eq("is_active", true)
+      .order("name");
+    content = (
+      <EngagementSettings
+        engagement={engagement}
+        client={client}
+        clients={(clientRows as { id: string; name: string; external_id: string | null; source: string }[]) ?? []}
+        canManage={canManage}
+        isTeam={isTeam}
+        firmMaxMb={upload.maxFileMb}
+      />
+    );
   }
 
   return (

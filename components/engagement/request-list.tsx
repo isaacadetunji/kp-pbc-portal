@@ -18,7 +18,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CriticalBadge, ItemStatusBadge, PriorityBadge } from "@/components/status-badge";
-import { ItemDetailSheet, type ItemPerms } from "@/components/items/item-detail-sheet";
+import { ItemDetailSheet, lockRights, type ItemPerms } from "@/components/items/item-detail-sheet";
+import { TEAM_RANK } from "@/lib/constants";
 import { ItemFormDialog } from "@/components/items/item-form-dialog";
 import { AssigneeAvatars, LockBadge, selectionFrom, type PersonWithRole } from "@/components/items/assignees";
 import { FILE_CLASS } from "@/lib/checklist-constants";
@@ -271,11 +272,16 @@ export function RequestList({
   }
 
   const closed = ["completed", "archived", "declined"].includes(engagementStatus);
-  const editPerms = (it: RequestItem | null) => ({
-    firm: it ? (it.is_locked ? perms.canManage : isTeam) : true,
-    client: it ? (it.is_locked ? perms.canManage : canEdit) : true,
-    lock: it ? perms.canManage || (it.created_by === userId && isTeam) : true,
-  });
+  // Only partner/manager/lead (or super admin) may create a locked request.
+  const canCreateLock = Boolean(perms.isSuperAdmin || (perms.teamRole ? TEAM_RANK[perms.teamRole] >= 2 : false));
+  const editPerms = (it: RequestItem | null) => {
+    const r = it ? lockRights(perms, it, team, userId) : null;
+    return {
+      firm: it ? (it.is_locked ? r!.canModifyLocked : isTeam) : true,
+      client: it ? (it.is_locked ? r!.canModifyLocked : canEdit) : true,
+      lock: it ? r!.canToggle : canCreateLock,
+    };
+  };
 
   async function submitForApproval(note: string) {
     const { error } = await supabase.rpc("submit_list_for_approval", { p_engagement_id: engagementId, p_note: note || null });

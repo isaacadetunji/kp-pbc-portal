@@ -58,7 +58,7 @@ export function AssigneeAvatars({
 
 export function LockBadge({ className }: { className?: string }) {
   return (
-    <span className={cn("inline-grid size-5 shrink-0 place-items-center rounded-md bg-neutral-soft text-neutral ring-1 ring-neutral/15", className)} title="Locked: only the people assigned (plus the partner, team lead and managers) can see it">
+    <span className={cn("inline-grid size-5 shrink-0 place-items-center rounded-[3px] bg-steel-soft text-steel ring-1 ring-steel/20", className)} title="Locked — visible to assignees and anyone more senior than the person who locked it">
       <Lock className="size-3" aria-hidden />
       <span className="sr-only">Locked request</span>
     </span>

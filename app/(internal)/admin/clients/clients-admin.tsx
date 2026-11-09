@@ -102,7 +102,7 @@ export function ClientsAdmin({
     setBusy(false);
     if (!res.ok) return toast.error(res.error);
     const r = res.data;
-    toast.success(`Synced ${r.fetched} clients: ${r.inserted} new, ${r.updated} updated, ${r.contactsUpserted} contacts`);
+    toast.success(`Synced ${r.fetched} clients: ${r.inserted} new, ${r.updated} updated${r.merged ? `, ${r.merged} manual merged` : ""}, ${r.contactsUpserted} contacts`);
     if (r.errors.length) toast.warning(`${r.errors.length} issue(s): ${r.errors.slice(0, 3).join("; ")}`);
     router.refresh();
   }
@@ -183,7 +183,9 @@ export function ClientsAdmin({
                         <button type="button" className="text-left hover:text-primary hover:underline focus-visible:underline focus-visible:outline-none" onClick={() => setDetail(c)} aria-label={`Open ${c.name}`}>
                           {c.name}
                         </button>
-                        {c.source === "manual" ? <Badge variant="warning" className="ml-1">Manual</Badge> : null}
+                        {c.source === "manual" ? (
+                          <span className="ml-1.5 inline-grid size-4 shrink-0 place-items-center rounded-[3px] bg-warning-soft text-[10px] font-bold text-warning ring-1 ring-warning/20 align-middle" title="Manual — added by hand; not yet in the client database" aria-label="Manual client">M</span>
+                        ) : null}
                       </div>
                       <div className="text-xs text-muted-foreground">{c.external_id ?? "No client code"} · {cc.length} contact(s)</div>
                     </TableCell>
@@ -250,7 +252,9 @@ export function ClientsAdmin({
                   <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     <span>{detail.external_id ?? "No client code"}</span>
                     {detail.group_id ? <Badge variant="secondary"><Layers /> {groupName_(detail.group_id)}</Badge> : null}
-                    {detail.source === "manual" ? <Badge variant="warning">Manual</Badge> : null}
+                    {detail.source === "manual"
+                      ? <Badge variant="warning" title="Manual — added by hand; not yet in the client database"><span className="font-bold">M</span> Manual</Badge>
+                      : <Badge variant="muted" title="Synced from the client database">Synced</Badge>}
                     {!detail.is_active ? <Badge variant="muted">Inactive</Badge> : null}
                   </div>
                   <SheetTitle className="text-lg">{detail.name}</SheetTitle>

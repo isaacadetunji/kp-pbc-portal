@@ -3,19 +3,33 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { Building2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { NotificationSettingsFields } from "@/components/notification-settings-fields";
 import { saveEngagementNotificationSettings } from "@/lib/actions/notification-settings";
 import { normaliseNotificationSettings } from "@/lib/checklist-constants";
 import { createClient } from "@/lib/supabase/client";
-import type { Engagement, NotificationSettings } from "@/lib/types";
+import type { Client, Engagement, NotificationSettings } from "@/lib/types";
 import { friendlyError } from "@/lib/utils";
 
-export function EngagementSettings({ engagement, canManage, firmMaxMb }: { engagement: Engagement; canManage: boolean; firmMaxMb: number }) {
+type ClientOption = { id: string; name: string; external_id: string | null; source: string };
+
+export function EngagementSettings({
+  engagement, client, clients, canManage, isTeam = false, firmMaxMb,
+}: {
+  engagement: Engagement;
+  client: Pick<Client, "id" | "name"> | null;
+  clients: ClientOption[];
+  canManage: boolean;
+  /** Any team member may change the mapped client (DB-enforced, audit-logged). */
+  isTeam?: boolean;
+  firmMaxMb: number;
+}) {
   const router = useRouter();
   const [name, setName] = useState(engagement.name);
   const [start, setStart] = useState(engagement.period_start ?? "");
@@ -50,6 +64,25 @@ export function EngagementSettings({ engagement, canManage, firmMaxMb }: { engag
     router.refresh();
   }
 
+  const [clientId, setClientId] = useState(engagement.client_id);
+  const currentClientName = clients.find((c) => c.id === clientId)?.name ?? client?.name ?? "—";
+
+  async function changeClient(newId: string) {
+    if (!newId || newId === engagement.client_id) return;
+    const target = clients.find((c) => c.id === newId);
+    if (!confirm(`Re-map this engagement to ${target?.name ?? "this client"}? Existing files keep their folders; new uploads use the new client's folder. This is recorded in the audit trail.`)) {
+      setClientId(engagement.client_id);
+      return;
+    }
+    const { error } = await createClient().rpc("change_engagement_client", { p_engagement_id: engagement.id, p_new_client_id: newId });
+    if (error) {
+      setClientId(engagement.client_id);
+      return toast.error(friendlyError(error));
+    }
+    toast.success(`Client changed to ${target?.name ?? "the selected client"}`);
+    router.refresh();
+  }
+
   return (
     <div className="space-y-6">
     <Card className="max-w-2xl">
@@ -57,6 +90,23 @@ export function EngagementSettings({ engagement, canManage, firmMaxMb }: { engag
         <CardTitle>Engagement settings</CardTitle>
         <CardDescription>Code {engagement.code} · storage folder {engagement.storage_root}</CardDescription>
       </CardHeader>
+      <CardContent className="space-y-2">
+        <div className="rounded-lg border p-3">
+          <div className="flex items-center gap-2 text-sm font-medium"><Building2 className="size-4 text-muted-foreground" /> Client / entity</div>
+          <p className="mt-0.5 text-xs text-muted-foreground">The client this engagement is mapped to. Switching it re-points reporting and future uploads; existing files keep their paths. Any team member may change it; the change is audit-logged.</p>
+          <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+            <Select value={clientId} onValueChange={(v) => { setClientId(v); changeClient(v); }} disabled={!isTeam}>
+              <SelectTrigger className="flex-1" aria-label="Mapped client"><SelectValue placeholder={currentClientName} /></SelectTrigger>
+              <SelectContent>
+                {clients.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>{c.name}{c.source === "manual" ? " · (M) Manual" : ""}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {!isTeam ? <p className="mt-1 text-xs text-muted-foreground">Only the engagement team can change the client.</p> : null}
+        </div>
+      </CardContent>
       <CardContent>
         <form onSubmit={save} className="space-y-5">
           <fieldset disabled={!canManage || busy} className="space-y-5">
@@ -94,10 +144,10 @@ export function EngagementSettings({ engagement, canManage, firmMaxMb }: { engag
             </fieldset>
             <label className="flex items-start justify-between gap-4 rounded-lg border p-3">
               <span>
-                <span className="block text-sm font-medium">Final acceptance by partner / team lead only</span>
-                <span className="block text-xs text-muted-foreground">When on, managers can review and query but only a partner or the team lead can accept items or mark them N/A.</span>
+                <span className="block text-sm font-medium">Only the partner, manager or team lead can accept items</span>
+                <span className="block text-xs text-muted-foreground">When on, a plain team member can review and query but only the partner, the manager or the team lead can accept items or mark them N/A. When off, any team member can accept.</span>
               </span>
-              <Switch checked={leadOnly} onCheckedChange={setLeadOnly} />
+              <Switch checked={leadOnly} onCheckedChange={setLeadOnly} aria-label="Only the partner, manager or team lead can accept items" />
             </label>
             <div className="space-y-2">
               <Label htmlFor="es-max">Maximum upload size (MB)</Label>

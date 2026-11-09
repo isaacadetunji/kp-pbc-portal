@@ -66,6 +66,15 @@
   --review-soft: #e9eef4;
   --neutral: #475569;
   --neutral-soft: #eef2f6;
+  /* Corporate tag tones (badges). Important = muted ochre (never yellow);
+     Urgent = burnt orange (more severe than Important, distinct from red
+     Critical); Steel = muted indigo for the Pre-execution stage. */
+  --ochre: #825114;
+  --ochre-soft: #f1e9d9;
+  --urgent: #b23c13;
+  --urgent-soft: #fbe6dc;
+  --steel: #3c5586;
+  --steel-soft: #e6ecf6;
   /* client-side people (avatars, chips): teal family of the logo accent, 6.4:1 */
   --client: #0b5d66;
   --client-soft: #d7f1f4;
@@ -140,6 +149,12 @@
   --review-soft: #1d2b42;
   --neutral: #aebccd;
   --neutral-soft: #202c44;
+  --ochre: #e0bd79;
+  --ochre-soft: #352a13;
+  --urgent: #f0a07f;
+  --urgent-soft: #3b1d12;
+  --steel: #a6bce4;
+  --steel-soft: #1a2740;
   --client: #58cfd8;
   --client-soft: #0c2e32;
 
@@ -201,6 +216,12 @@
   --color-review-soft: var(--review-soft);
   --color-neutral: var(--neutral);
   --color-neutral-soft: var(--neutral-soft);
+  --color-ochre: var(--ochre);
+  --color-ochre-soft: var(--ochre-soft);
+  --color-urgent: var(--urgent);
+  --color-urgent-soft: var(--urgent-soft);
+  --color-steel: var(--steel);
+  --color-steel-soft: var(--steel-soft);
   --color-client: var(--client);
   --color-client-soft: var(--client-soft);
   --color-sidebar: var(--sidebar);

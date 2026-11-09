@@ -43,6 +43,38 @@ function Contact({ email, phone }: { email?: string | null; phone?: string | nul
   );
 }
 
+/** One single-holder role control: current holder + picker (choose or add) + clear. */
+function HolderRow({
+  roleLabel, icon, holder, staff, onTeam, idPrefix, pick, onPick, onClear,
+}: {
+  roleLabel: string;
+  icon: React.ReactNode;
+  holder?: TeamMember;
+  staff: Person[];
+  onTeam: Set<string>;
+  idPrefix: string;
+  pick?: string;
+  onPick: (userId: string) => void;
+  onClear?: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+      <label htmlFor={idPrefix} className="flex items-center gap-2 text-sm font-medium sm:w-44">{icon} {roleLabel}</label>
+      <Select value={pick ?? ""} onValueChange={onPick}>
+        <SelectTrigger id={idPrefix} className="flex-1"><SelectValue placeholder={holder ? `Current: ${holder.full_name}` : `No ${roleLabel.toLowerCase()} yet`} /></SelectTrigger>
+        <SelectContent>
+          {staff.filter((s) => s.id !== holder?.id).map((s) => (
+            <SelectItem key={s.id} value={s.id}>{s.full_name || s.email}{s.job_title ? ` · ${s.job_title}` : ""}{onTeam.has(s.id) ? "" : " (not on the team yet)"}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {onClear ? (
+        <Button type="button" size="sm" variant="ghost" onClick={onClear} aria-label={`Clear the ${roleLabel.toLowerCase()}`}>Clear</Button>
+      ) : null}
+    </div>
+  );
+}
+
 export function TeamAccess({
   engagementId,
   team,
@@ -81,37 +113,57 @@ export function TeamAccess({
 
   const onTeam = new Set(team.map((t) => t.id));
   const lead = team.find((t) => t.team_role === "lead");
-  // Roles a user may give by direct edit (the lead changes through set_engagement_lead)
-  const assignable = TEAM_ROLE_ORDER.filter((r) => r !== "lead" && (r !== "partner" || isLead));
-  const canEditRow = (r: TeamRole) => manage && r !== "lead" && (r !== "partner" || isLead);
+  const partner = team.find((t) => t.team_role === "partner");
+  const manager = team.find((t) => t.team_role === "manager");
+  // Every role change routes through set_engagement_role (single-holder rule +
+  // demotion to member enforced in the DB). Members are shown a role picker too.
+  const assignable = TEAM_ROLE_ORDER;
+  const canEditRow = (_r?: TeamRole) => manage;
+  const nameOf = (id: string) => staff.find((s) => s.id === id)?.full_name ?? team.find((t) => t.id === id)?.full_name ?? "this person";
 
+  async function setRole(userId: string, role: TeamRole) {
+    const { error } = await supabase.rpc("set_engagement_role", { p_engagement_id: engagementId, p_user_id: userId, p_role: role });
+    if (error) return toast.error(friendlyError(error));
+    router.refresh();
+    return true;
+  }
+  // Single-holder controls (Partner / Manager / Team lead). Reassigning drops the
+  // previous holder to a plain member (never auto-promoted).
+  async function changeHolder(role: TeamRole, userId: string, prev?: TeamMember) {
+    if (!userId) return;
+    const note = prev ? ` ${prev.full_name} becomes a plain team member.` : "";
+    if (!confirm(`Make ${nameOf(userId)} the ${TEAM_ROLE[role].toLowerCase()}?${note}`)) return;
+    if (await setRole(userId, role)) toast.success(`${nameOf(userId)} is now the ${TEAM_ROLE[role].toLowerCase()}`);
+  }
+  async function clearHolder(role: TeamRole, holder: TeamMember) {
+    if (!confirm(`Remove ${holder.full_name} as ${TEAM_ROLE[role].toLowerCase()}? They stay on the team as a plain member.`)) return;
+    const { error } = await supabase.rpc("set_engagement_role", { p_engagement_id: engagementId, p_user_id: null, p_role: role });
+    if (error) return toast.error(friendlyError(error));
+    toast.success(`${holder.full_name} is now a plain team member`);
+    router.refresh();
+  }
   async function changeLead(newLead: string) {
     if (!newLead) return;
-    const person = staff.find((s) => s.id === newLead) ?? team.find((t) => t.id === newLead);
-    if (!confirm(`Make ${person?.full_name ?? "this person"} the team lead?${lead ? ` ${lead.full_name} becomes a manager.` : ""}`)) {
+    if (!confirm(`Make ${nameOf(newLead)} the team lead?${lead ? ` ${lead.full_name} becomes a plain team member.` : ""}`)) {
       setLeadPick("");
       return;
     }
-    const { error } = await supabase.rpc("set_engagement_lead", { p_engagement_id: engagementId, p_user_id: newLead });
-    if (error) return toast.error(friendlyError(error));
-    toast.success(`${person?.full_name ?? "New lead"} is now the team lead`);
+    if (await setRole(newLead, "lead")) toast.success(`${nameOf(newLead)} is now the team lead`);
     setLeadPick("");
-    router.refresh();
   }
   const granted = new Set(access.filter((a) => !a.revoked_at).map((a) => a.contact.id));
   const visibleAccess = isTeam ? access : access.filter((a) => !a.revoked_at);
 
   async function addMember() {
     if (!addUser) return;
-    const { error } = await supabase.from("engagement_team").insert({ engagement_id: engagementId, user_id: addUser, team_role: addRole });
-    if (error) return toast.error(friendlyError(error));
-    setAddUser("");
-    router.refresh();
+    if (await setRole(addUser, addRole)) {
+      toast.success(`${nameOf(addUser)} added as ${TEAM_ROLE[addRole].toLowerCase()}`);
+      setAddUser("");
+      setAddRole("member");
+    }
   }
   async function changeRole(userId: string, role: TeamRole) {
-    const { error } = await supabase.from("engagement_team").update({ team_role: role }).eq("engagement_id", engagementId).eq("user_id", userId);
-    if (error) return toast.error(friendlyError(error));
-    router.refresh();
+    await setRole(userId, role);
   }
   async function removeMember(userId: string) {
     if (!confirm("Remove this person from the engagement team?")) return;
@@ -161,7 +213,7 @@ export function TeamAccess({
           <CardTitle className="flex items-center gap-2"><Users className="size-4" /> Engagement team</CardTitle>
           <CardDescription>
             {isTeam
-              ? "Partners, the team lead and managers edit the request list, invite client users, approve and move the stage. Partners and the team lead can also waive critical items and complete an engagement with open items. There is exactly one team lead."
+              ? "Hierarchy: engagement partner → manager → team lead → members. The partner, manager and team lead edit the request list, invite client users, approve and move the stage. There is one partner, one manager and one team lead; the rest are members."
               : `The ${team.length} people at the firm working on this engagement.`}
           </CardDescription>
         </CardHeader>
@@ -203,17 +255,24 @@ export function TeamAccess({
             </ul>
           </div>
           {manage ? (
-            <div className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3 sm:flex-row sm:items-center">
-              <label htmlFor="lead-pick" className="flex items-center gap-2 text-sm font-medium sm:w-44"><Crown className="size-4 text-muted-foreground" /> Change team lead</label>
-              <Select value={leadPick} onValueChange={(v) => { setLeadPick(v); changeLead(v); }}>
-                <SelectTrigger id="lead-pick" className="flex-1" aria-describedby="lead-pick-help"><SelectValue placeholder={lead ? `Current: ${lead.full_name}` : "Choose the team lead"} /></SelectTrigger>
-                <SelectContent>
-                  {staff.filter((s) => s.id !== lead?.id).map((s) => (
-                    <SelectItem key={s.id} value={s.id}>{s.full_name || s.email}{s.job_title ? ` · ${s.job_title}` : ""}{onTeam.has(s.id) ? "" : " (not on the team yet)"}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <span id="lead-pick-help" className="text-xs text-muted-foreground sm:w-48">The previous lead becomes a manager.</span>
+            <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+              <div className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Single-holder roles</div>
+              <p className="text-xs text-muted-foreground">One engagement partner, one manager and one team lead. Reassigning any of them drops the previous holder to a plain team member (never auto-promoted). Adding someone not on the team yet puts them on it.</p>
+              <HolderRow
+                roleLabel="Engagement partner" icon={<Crown className="size-4 text-muted-foreground" />}
+                holder={partner} staff={staff} onTeam={onTeam} idPrefix="partner-pick"
+                onPick={(id) => changeHolder("partner", id, partner)} onClear={partner ? () => clearHolder("partner", partner) : undefined}
+              />
+              <HolderRow
+                roleLabel="Manager" icon={<ShieldCheck className="size-4 text-muted-foreground" />}
+                holder={manager} staff={staff} onTeam={onTeam} idPrefix="manager-pick"
+                onPick={(id) => changeHolder("manager", id, manager)} onClear={manager ? () => clearHolder("manager", manager) : undefined}
+              />
+              <HolderRow
+                roleLabel="Team lead" icon={<Crown className="size-4 text-muted-foreground" />}
+                holder={lead} staff={staff} onTeam={onTeam} idPrefix="lead-pick" pick={leadPick}
+                onPick={(id) => { setLeadPick(id); changeLead(id); }}
+              />
             </div>
           ) : null}
           {manage ? (

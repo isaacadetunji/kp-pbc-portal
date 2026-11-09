@@ -268,13 +268,17 @@ export function ItemFormDialog({
             <Checkbox
               checked={locked}
               onCheckedChange={(v) => setLocked(v === true)}
-              disabled={Boolean(item) && !canChangeAssignees.lock}
+              disabled={!canChangeAssignees.lock}
               className="mt-0.5"
               aria-describedby="it-lock-help"
             />
             <span>
               <span className="flex items-center gap-1.5 text-sm font-medium"><Lock className="size-3.5" aria-hidden /> Lock this request</span>
-              <span id="it-lock-help" className="block text-xs text-muted-foreground">Only the people assigned (plus the partner, team lead and managers) can see it</span>
+              <span id="it-lock-help" className="block text-xs text-muted-foreground">
+                {canChangeAssignees.lock
+                  ? "Visible to its assignees, the person who locks it and anyone more senior. Only the partner, manager or team lead can lock."
+                  : "Only the engagement partner, manager or team lead can lock a request."}
+              </span>
               {locked && assign.client.length === 0 ? (
                 <span className="mt-1 block text-xs text-warning">No client user is assigned, so no one at the client will see it.</span>
               ) : null}
