@@ -219,8 +219,6 @@ select pg_temp.assert((select count(*) = 1 from public.notifications where type 
 -- review workflow ------------------------------------------------------------------------------------
 select pg_temp.act_as('member@kp.test');
 select public.review_item((select id from public.request_items where code='GEN-01'), 'start_review');
-select pg_temp.expect_error($$select public.review_item((select id from public.request_items where code='GEN-01'), 'accept')$$,
-  'restricted', 'team member cannot give final acceptance');
 select pg_temp.expect_error($$select public.review_item((select id from public.request_items where code='GEN-01'), 'query', '')$$,
   'explain', 'query requires a note');
 select public.review_item((select id from public.request_items where code='GEN-01'), 'query', 'Please provide the certified true copy.');
@@ -238,17 +236,22 @@ select pg_temp.assert(public.submit_item((select id from public.request_items wh
 select pg_temp.assert((select count(distinct version_no) = 2 from public.request_item_files
   where request_item_id = (select id from public.request_items where code='GEN-01')), 'previous version retained');
 
--- lead-only acceptance switch
+-- final-acceptance toggle: ON -> only partner / manager / lead; OFF -> any member
 select pg_temp.act_as('lead@kp.test');
 update public.engagements set lead_only_acceptance = true where id = current_setting('test.eng')::uuid;
-select pg_temp.act_as('manager@kp.test');
+select pg_temp.act_as('member@kp.test');
 select pg_temp.expect_error($$select public.review_item((select id from public.request_items where code='GEN-01'), 'accept')$$,
-  'restricted', 'manager blocked when acceptance is lead-only');
-select pg_temp.act_as('lead@kp.test');
-update public.engagements set lead_only_acceptance = false where id = current_setting('test.eng')::uuid;
+  'restricted', 'plain member blocked when acceptance is partner/manager/lead only');
 select pg_temp.act_as('manager@kp.test');
 select public.review_item((select id from public.request_items where code='GEN-01'), 'accept');
-select pg_temp.assert((select status = 'accepted' from public.request_items where code='GEN-01'), 'manager accepted item');
+select pg_temp.assert((select status = 'accepted' from public.request_items where code='GEN-01'), 'manager still accepts when restricted');
+-- reopen then verify a plain member can accept when the toggle is OFF
+select public.review_item((select id from public.request_items where code='GEN-01'), 'reopen');
+select pg_temp.act_as('lead@kp.test');
+update public.engagements set lead_only_acceptance = false where id = current_setting('test.eng')::uuid;
+select pg_temp.act_as('member@kp.test');
+select public.review_item((select id from public.request_items where code='GEN-01'), 'accept');
+select pg_temp.assert((select status = 'accepted' from public.request_items where code='GEN-01'), 'any team member accepts when the toggle is off');
 
 -- N/A and waivers --------------------------------------------------------------------------------------------
 select pg_temp.expect_error($$select public.review_item((select id from public.request_items where code='GEN-02'), 'not_applicable', 'n/a')$$,
@@ -766,11 +769,11 @@ select pg_temp.act_as('manager@kp.test');
 select public.set_engagement_lead(current_setting('test.a_eng')::uuid, (select id from public.profiles where email = 'member@kp.test'));
 select pg_temp.assert((select team_role::text = 'lead' from public.engagement_team where engagement_id = current_setting('test.a_eng')::uuid
     and user_id = (select id from public.profiles where email = 'member@kp.test'))
-  and (select team_role::text = 'manager' from public.engagement_team where engagement_id = current_setting('test.a_eng')::uuid
+  and (select team_role::text = 'member' from public.engagement_team where engagement_id = current_setting('test.a_eng')::uuid
     and user_id = (select id from public.profiles where email = 'lead@kp.test'))
   and (select lead_id = (select id from public.profiles where email = 'member@kp.test') from public.engagements
     where id = current_setting('test.a_eng')::uuid),
-  'manager changed the lead: previous lead became a manager, lead_id kept in sync');
+  'manager changed the lead: previous lead dropped to a plain member (not manager), lead_id kept in sync');
 select pg_temp.assert((select count(*) = 1 from public.engagement_team where engagement_id = current_setting('test.a_eng')::uuid
   and team_role = 'lead'), 'still exactly one lead');
 select pg_temp.act_as('member@kp.test');
@@ -878,8 +881,8 @@ select pg_temp.act_as('member@kp.test');
 select pg_temp.expect_error($$select public.set_request_item_assignees(current_setting('test.a_lock')::uuid, 'firm',
   array[(select id from public.profiles where email = 'junior@kp.test')])$$, 'not permitted',
   'on a locked request a firm assignee cannot change the assignees');
-select pg_temp.expect_error($$select public.set_request_item_lock(current_setting('test.a_lock')::uuid, false)$$, 'only a partner',
-  'a team member (not the creator) cannot unlock');
+select pg_temp.expect_error($$select public.set_request_item_lock(current_setting('test.a_lock')::uuid, false)$$, 'more senior',
+  'a team member (not the locker, junior to the lead who locked it) cannot unlock');
 select pg_temp.act_as('cfo@client.test');
 select pg_temp.expect_error($$select public.set_request_item_assignees(current_setting('test.a_lock')::uuid, 'client',
   array[pg_temp.uid('fc@client.test')])$$, 'not permitted',
@@ -931,7 +934,12 @@ select pg_temp.assert((select count(*) = 1 from public.request_items where id = 
 select pg_temp.act_as('member@kp.test');
 select pg_temp.assert((select count(*) = 0 from public.request_items where id = current_setting('test.a_open')::uuid),
   'a team member who is not assigned no longer sees it once locked');
+-- The lead cannot unlock a manager's lock (the manager outranks the lead); the
+-- locker (the manager) or a partner/super admin can.
 select pg_temp.act_as('lead@kp.test');
+select pg_temp.expect_error($$select public.set_request_item_lock(current_setting('test.a_open')::uuid, false)$$, 'permitted',
+  'the lead cannot unlock (nor even see) a manager''s lock it is not assigned to (the manager outranks the lead)');
+select pg_temp.act_as('manager@kp.test');
 select public.set_request_item_lock(current_setting('test.a_open')::uuid, false);
 select pg_temp.act_as('cfo@client.test');
 select pg_temp.assert((select count(*) = 1 from public.request_items where id = current_setting('test.a_open')::uuid), 'unlocked again: visible to all client users');
@@ -1193,7 +1201,8 @@ select pg_temp.act_as('manager@kp.test');
 select pg_temp.assert((select client_instant from public.engagement_notification_settings where engagement_id = current_setting('test.eng')::uuid),
   'a team member (not lead/manager) cannot change notification settings');
 update public.engagement_notification_settings set client_reminder_frequency = 'daily', client_reminder_time = '09:00',
-  team_reminder_frequency = 'daily', team_reminder_time = '08:00'
+  client_reminder_times = array['09:00']::time[], team_reminder_frequency = 'daily', team_reminder_time = '08:00',
+  team_reminder_times = array['08:00']::time[]
 where engagement_id = current_setting('test.eng')::uuid;
 select pg_temp.assert((select client_reminder_frequency = 'daily' and updated_by = auth.uid() from public.engagement_notification_settings
   where engagement_id = current_setting('test.eng')::uuid), 'a manager changes notification settings (stamped)');
@@ -1249,12 +1258,12 @@ select public.mark_notifications_emailed(array(select notification_id from publi
 
 -- reminder digests (2026-10-26 is a Monday; times are Lagos = UTC+1) ------------------------
 select set_config('test.mon10', '2026-10-26 09:30:00+00', false);  -- 10:30 Lagos
-select pg_temp.assert(public.reminder_is_due('weekly', 1::smallint, '17:00', 1, '17:05')
-  and not public.reminder_is_due('weekly', 1::smallint, '17:00', 2, '17:05')
-  and not public.reminder_is_due('weekly', 1::smallint, '17:00', 1, '16:59')
-  and public.reminder_is_due('weekdays', 1::smallint, '09:00', 5, '09:00')
-  and not public.reminder_is_due('weekdays', 1::smallint, '09:00', 6, '10:00')
-  and not public.reminder_is_due('off', 1::smallint, '00:00', 1, '23:00'), 'reminder schedule rules (weekly / weekdays / off / time of day)');
+select pg_temp.assert(public.reminder_is_due('weekly', 1::smallint, array['17:00']::time[], 1, '17:05')
+  and not public.reminder_is_due('weekly', 1::smallint, array['17:00']::time[], 2, '17:05')
+  and not public.reminder_is_due('weekly', 1::smallint, array['17:00']::time[], 1, '16:59')
+  and public.reminder_is_due('weekdays', 1::smallint, array['09:00']::time[], 5, '09:00')
+  and not public.reminder_is_due('weekdays', 1::smallint, array['09:00']::time[], 6, '10:00')
+  and not public.reminder_is_due('off', 1::smallint, array['00:00']::time[], 1, '23:00'), 'reminder schedule rules (weekly / weekdays / off / time of day)');
 select set_config('test.cfo_n', (select count(*)::text from public.request_items ri
   where ri.engagement_id = current_setting('test.eng')::uuid and ri.status in ('requested', 'queried') and not ri.is_locked), false);
 select pg_temp.assert((select item_count = current_setting('test.cfo_n')::int and jsonb_array_length(items) = item_count
@@ -1278,9 +1287,9 @@ select pg_temp.assert((select count(*) = 0 from public.reminder_digests_due(curr
   where engagement_id = current_setting('test.eng2')::uuid and audience = 'client'),
   'weekly client reminders are not sent before their time (17:00)');
 select public.record_reminder(current_setting('test.eng')::uuid, (select id from public.profiles where email = 'cfo@client.test'),
-  'client', '2026-10-26', 5, 'sent');
+  'client', '2026-10-26', 5, 'sent', null, '09:00');
 select pg_temp.assert((select count(*) = 0 from public.reminder_digests_due(current_setting('test.mon10')::timestamptz)
-  where engagement_id = current_setting('test.eng')::uuid and audience = 'client'), 'a reminder is sent at most once per day');
+  where engagement_id = current_setting('test.eng')::uuid and audience = 'client'), 'a reminder is sent at most once per time+day');
 select pg_temp.assert((select count(*) = 1 from public.reminder_digests_due('2026-10-27 09:30:00+00')
   where engagement_id = current_setting('test.eng')::uuid and audience = 'client'), 'the daily reminder is due again the next day');
 update public.engagement_client_access set revoked_at = now()
@@ -1289,7 +1298,8 @@ select pg_temp.assert((select count(*) = 0 from public.reminder_digests_due('202
   where engagement_id = current_setting('test.eng')::uuid and audience = 'client'), 'revoked client users get no reminders');
 update public.engagement_client_access set revoked_at = null
 where engagement_id = current_setting('test.eng')::uuid and contact_id = (select id from public.client_contacts where email = 'cfo@client.test');
-update public.engagement_notification_settings set client_only_when_outstanding = false, client_reminder_frequency = 'daily', client_reminder_time = '09:00'
+update public.engagement_notification_settings set client_only_when_outstanding = false, client_reminder_frequency = 'daily',
+  client_reminder_time = '09:00', client_reminder_times = array['09:00']::time[]
 where engagement_id = current_setting('test.eng2')::uuid;
 select pg_temp.assert((select count(*) = 1 from public.reminder_digests_due(current_setting('test.mon10')::timestamptz)
   where engagement_id = current_setting('test.eng2')::uuid and audience = 'client'), 'client reminder due on the second engagement');
@@ -1303,3 +1313,118 @@ select pg_temp.assert((select item_count = 0 from public.reminder_digests_due(cu
 update public.engagement_notification_settings set client_only_when_outstanding = true where engagement_id = current_setting('test.eng2')::uuid;
 select pg_temp.assert((select count(*) = 0 from public.reminder_digests_due(current_setting('test.mon10')::timestamptz)
   where engagement_id = current_setting('test.eng2')::uuid), '"only when outstanding" on: no reminder when nothing is outstanding; team skipped without submissions');
+
+-- =============================================================================
+-- Phase 0010: role hierarchy, seniority-based locking, change-client, dedupe,
+-- multiple reminder times
+-- =============================================================================
+-- Fresh engagement with a full hierarchy (partner = outsider, lead, manager, member)
+select pg_temp.act_as('lead@kp.test');
+select set_config('test.eng5', public.create_engagement(
+  '11111111-1111-1111-1111-111111111111',
+  (select id from public.engagement_types where code = 'SA'),
+  'Roles and locking FY2026', '2026-01-01', '2026-12-31',
+  (select id from public.profiles where email = 'lead@kp.test'),
+  array(select mi.id from public.master_checklist_items mi
+        join public.master_item_engagement_types x on x.master_item_id = mi.id
+        join public.engagement_types t on t.id = x.engagement_type_id and t.code = 'SA'),
+  null,
+  jsonb_build_array(
+    jsonb_build_object('user_id', (select id from public.profiles where email = 'outsider@kp.test'), 'team_role', 'partner'),
+    jsonb_build_object('user_id', (select id from public.profiles where email = 'manager@kp.test'), 'team_role', 'manager'),
+    jsonb_build_object('user_id', (select id from public.profiles where email = 'member@kp.test'), 'team_role', 'member'))
+)::text, false);
+select set_config('test.li',  (select id::text from public.request_items where engagement_id = current_setting('test.eng5')::uuid and code = 'GEN-01'), false);
+select set_config('test.li2', (select id::text from public.request_items where engagement_id = current_setting('test.eng5')::uuid and code = 'GEN-02'), false);
+
+-- (3) Only partner/manager/lead may lock; a plain member may not.
+select pg_temp.act_as('member@kp.test');
+select pg_temp.expect_error($$select public.set_request_item_lock(current_setting('test.li')::uuid, true)$$,
+  'partner, manager or team lead', 'a plain member cannot lock a request');
+
+-- The team lead locks an item (locked_by recorded).
+select pg_temp.act_as('lead@kp.test');
+select public.set_request_item_lock(current_setting('test.li')::uuid, true);
+select pg_temp.assert((select is_locked and locked_by = (select id from public.profiles where email = 'lead@kp.test')
+  from public.request_items where id = current_setting('test.li')::uuid), 'the team lead locked the item; locked_by recorded');
+
+-- (3) An unassigned member cannot see a lead-locked item; a senior (manager/partner) can.
+select pg_temp.act_as('member@kp.test');
+select pg_temp.assert((select count(*) = 0 from public.request_items where id = current_setting('test.li')::uuid),
+  'an unassigned member cannot see the lead-locked item');
+select pg_temp.act_as('manager@kp.test');
+select pg_temp.assert((select count(*) = 1 from public.request_items where id = current_setting('test.li')::uuid),
+  'a manager (senior to the lead) sees the lead-locked item');
+select pg_temp.act_as('outsider@kp.test');
+select pg_temp.assert((select count(*) = 1 from public.request_items where id = current_setting('test.li')::uuid),
+  'the partner sees the lead-locked item');
+
+-- (3) The partner locks a different item; a manager cannot unlock or see it.
+select public.set_request_item_lock(current_setting('test.li2')::uuid, true); -- as partner
+select pg_temp.act_as('manager@kp.test');
+select pg_temp.expect_error($$select public.set_request_item_lock(current_setting('test.li2')::uuid, false)$$,
+  'permitted', 'a manager cannot unlock (nor see) a partner''s lock it is not assigned to');
+select pg_temp.assert((select count(*) = 0 from public.request_items where id = current_setting('test.li2')::uuid),
+  'a manager cannot see a partner-locked item it is not assigned to');
+
+-- The locker (lead) can unlock its own lock; locked_by clears.
+select pg_temp.act_as('lead@kp.test');
+select public.set_request_item_lock(current_setting('test.li')::uuid, false);
+select pg_temp.assert((select not is_locked and locked_by is null from public.request_items where id = current_setting('test.li')::uuid),
+  'the locker unlocks its own lock and locked_by clears');
+
+-- (6) Any team member may change the engagement's client; it is audit-logged, and
+-- switching to a non-existent client is rejected.
+select pg_temp.act_as('member@kp.test');
+select public.change_engagement_client(current_setting('test.eng5')::uuid, '22222222-2222-2222-2222-222222222222');
+select pg_temp.assert((select client_id = '22222222-2222-2222-2222-222222222222' from public.engagements where id = current_setting('test.eng5')::uuid),
+  'a team member re-mapped the engagement to another client');
+select pg_temp.expect_error($$select public.change_engagement_client(current_setting('test.eng5')::uuid, '00000000-0000-0000-0000-000000000000')$$,
+  'Unknown or inactive client', 'cannot switch to a non-existent client');
+select pg_temp.as_super();
+select pg_temp.assert((select count(*) >= 1 from public.audit_log where action = 'engagement_client_changed' and engagement_id = current_setting('test.eng5')::uuid),
+  'the client change is audit-logged');
+
+-- (1) Reassigning the team lead demotes the OLD lead to a plain MEMBER (not manager).
+select pg_temp.act_as('manager@kp.test');
+select public.set_engagement_lead(current_setting('test.eng5')::uuid, (select id from public.profiles where email = 'manager@kp.test'));
+select pg_temp.assert((select team_role = 'member' from public.engagement_team
+  where engagement_id = current_setting('test.eng5')::uuid and user_id = (select id from public.profiles where email = 'lead@kp.test')),
+  'the previous team lead becomes a plain member, never auto-promoted to manager');
+select pg_temp.assert((select team_role = 'lead' from public.engagement_team
+  where engagement_id = current_setting('test.eng5')::uuid and user_id = (select id from public.profiles where email = 'manager@kp.test')),
+  'the named user is now the team lead');
+select pg_temp.assert((select lead_id = (select id from public.profiles where email = 'manager@kp.test') from public.engagements where id = current_setting('test.eng5')::uuid),
+  'engagements.lead_id stays in sync with the lead row');
+select pg_temp.assert((select count(*) = 1 from public.engagement_team where engagement_id = current_setting('test.eng5')::uuid and team_role = 'lead'),
+  'exactly one team lead after the change');
+
+-- (7) No duplicate clients (case-insensitive name).
+select pg_temp.as_super();
+select pg_temp.expect_error($$insert into public.clients (name) values ('adebayo foods plc')$$,
+  'duplicate', 'a duplicate client name (case-insensitive) is rejected');
+
+-- (4) Reminders may fire at several chosen times per day; the firing time is the latest due.
+select pg_temp.assert(
+  public.reminder_is_due('daily', 1::smallint, array['09:00','14:00','18:00']::time[], 3, '14:30')
+  and public.reminder_is_due('daily', 1::smallint, array['09:00','14:00','18:00']::time[], 3, '09:05')
+  and not public.reminder_is_due('daily', 1::smallint, array['09:00','14:00','18:00']::time[], 3, '08:30')
+  and public.reminder_due_time(array['09:00','14:00','18:00']::time[], '14:30') = '14:00'
+  and public.reminder_due_time(array['09:00','14:00','18:00']::time[], '18:05') = '18:00',
+  'reminders fire at any of several chosen times; the firing time is the latest due');
+
+-- (4) The same engagement can send at two different times on one day, de-duped per time.
+update public.engagement_notification_settings
+  set client_reminder_frequency = 'daily', client_reminder_times = array['09:00','14:00']::time[], client_only_when_outstanding = false
+  where engagement_id = current_setting('test.eng2')::uuid;
+select pg_temp.assert((select reminder_time = '09:00' from public.reminder_digests_due(current_setting('test.mon10')::timestamptz)
+  where engagement_id = current_setting('test.eng2')::uuid and audience = 'client' limit 1),
+  'the 09:00 reminder slot fires at 10:30 Lagos');
+select public.record_reminder(current_setting('test.eng2')::uuid, (select id from public.profiles where email = 'cfo@client.test'),
+  'client', '2026-10-26', 0, 'sent', null, '09:00');
+select pg_temp.assert((select count(*) = 0 from public.reminder_digests_due(current_setting('test.mon10')::timestamptz)
+  where engagement_id = current_setting('test.eng2')::uuid and audience = 'client'),
+  'the 09:00 slot is not repeated once logged');
+select pg_temp.assert((select reminder_time = '14:00' from public.reminder_digests_due('2026-10-26 14:00:00+00')
+  where engagement_id = current_setting('test.eng2')::uuid and audience = 'client' limit 1),
+  'the 14:00 reminder slot still fires later the same day');
