@@ -44,25 +44,37 @@ export const WEEKDAYS: { value: number; label: string }[] = [
   { value: 7, label: "Sunday" },
 ];
 
-/** Reminder times offered (the scheduler runs hourly). */
+/** Full set of times selectable as reminder slots (the scheduler runs hourly). */
 export const REMINDER_TIMES: string[] = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, "0")}:00`);
+
+/** The handful of times offered as quick toggles in the UI (several can be on). */
+export const REMINDER_TIME_SLOTS: string[] = ["08:00", "10:00", "12:00", "14:00", "16:00", "18:00"];
 
 export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   client_instant: true,
   client_reminder_frequency: "weekly",
   client_reminder_weekday: 1,
   client_reminder_time: "17:00",
+  client_reminder_times: ["17:00"],
   client_only_when_outstanding: true,
   team_instant: true,
   team_reminder_frequency: "weekdays",
   team_reminder_weekday: 1,
   team_reminder_time: "09:00",
+  team_reminder_times: ["09:00"],
 };
 
 /** Normalise Postgres time ("17:00:00") to "17:00". */
 export function hhmm(t: string | null | undefined, fallback = "09:00"): string {
   const m = /^(\d{1,2}):(\d{2})/.exec(t ?? "");
   return m ? `${m[1]!.padStart(2, "0")}:${m[2]}` : fallback;
+}
+
+/** Normalise a Postgres time[] (["17:00:00", ...]) to sorted "HH:MM" strings. */
+export function hhmmList(v: unknown, fallback: string[]): string[] {
+  const raw = Array.isArray(v) ? v : [];
+  const out = Array.from(new Set(raw.map((t) => hhmm(t as string, "")).filter(Boolean))).sort();
+  return out.length ? out : [...fallback];
 }
 
 /** Merge stored settings (possibly partial / malformed) over the defaults. */
@@ -72,22 +84,28 @@ export function normaliseNotificationSettings(v: Partial<Record<keyof Notificati
   const day = (x: unknown, f: number) => (Number.isInteger(Number(x)) && Number(x) >= 1 && Number(x) <= 7 ? Number(x) : f);
   const bool = (x: unknown, f: boolean) => (typeof x === "boolean" ? x : f);
   const s = v ?? {};
+  // Fall back to the single legacy time when no array is stored yet.
+  const clientTimes = hhmmList(s.client_reminder_times, s.client_reminder_time ? [hhmm(s.client_reminder_time as string, d.client_reminder_time)] : d.client_reminder_times);
+  const teamTimes = hhmmList(s.team_reminder_times, s.team_reminder_time ? [hhmm(s.team_reminder_time as string, d.team_reminder_time)] : d.team_reminder_times);
   return {
     client_instant: bool(s.client_instant, d.client_instant),
     client_reminder_frequency: freq(s.client_reminder_frequency, d.client_reminder_frequency),
     client_reminder_weekday: day(s.client_reminder_weekday, d.client_reminder_weekday),
-    client_reminder_time: hhmm(s.client_reminder_time as string, d.client_reminder_time),
+    client_reminder_time: clientTimes[0]!,
+    client_reminder_times: clientTimes,
     client_only_when_outstanding: bool(s.client_only_when_outstanding, d.client_only_when_outstanding),
     team_instant: bool(s.team_instant, d.team_instant),
     team_reminder_frequency: freq(s.team_reminder_frequency, d.team_reminder_frequency),
     team_reminder_weekday: day(s.team_reminder_weekday, d.team_reminder_weekday),
-    team_reminder_time: hhmm(s.team_reminder_time as string, d.team_reminder_time),
+    team_reminder_time: teamTimes[0]!,
+    team_reminder_times: teamTimes,
   };
 }
 
-export function describeSchedule(freq: ReminderFrequency, weekday: number, time: string): string {
+export function describeSchedule(freq: ReminderFrequency, weekday: number, times: string[]): string {
   if (freq === "off") return "Off";
-  const at = `at ${hhmm(time)} (Lagos)`;
+  const list = (times.length ? times : ["09:00"]).map((t) => hhmm(t)).join(", ");
+  const at = `at ${list} (Lagos)`;
   if (freq === "weekly") return `Every ${WEEKDAYS.find((w) => w.value === weekday)?.label ?? "Monday"} ${at}`;
   return `${REMINDER_FREQUENCY[freq]} ${at}`;
 }

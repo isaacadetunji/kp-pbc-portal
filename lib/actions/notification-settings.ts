@@ -8,6 +8,8 @@ import { friendlyError } from "@/lib/utils";
 import type { ActionResult } from "./result";
 
 const time = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use HH:MM");
+const timeList = z.array(time).min(1, "Pick at least one reminder time").max(24)
+  .transform((a) => [...new Set(a)].sort());
 const freq = z.enum(["off", "daily", "weekdays", "weekly"]);
 const day = z.number().int().min(1).max(7);
 const settingsSchema = z.object({
@@ -15,11 +17,13 @@ const settingsSchema = z.object({
   client_reminder_frequency: freq,
   client_reminder_weekday: day,
   client_reminder_time: time,
+  client_reminder_times: timeList,
   client_only_when_outstanding: z.boolean(),
   team_instant: z.boolean(),
   team_reminder_frequency: freq,
   team_reminder_weekday: day,
   team_reminder_time: time,
+  team_reminder_times: timeList,
 });
 export type NotificationSettingsInput = z.infer<typeof settingsSchema>;
 

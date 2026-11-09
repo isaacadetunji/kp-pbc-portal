@@ -173,6 +173,26 @@ async function main() {
       "contact",
     );
   }
+  // A MANUAL client whose name matches a mock-directory record ("Yaba Tech Hub
+  // Ltd", KP-CL-0007). It shows the compact "M" tag until a sync merges it in
+  // place — the sync matches by name, fills its external_id and flips source to
+  // 'api', and the "M" tag disappears (no duplicate). Exercises the dedupe/merge
+  // path in the demo and the e2e admin spec.
+  const { data: manualExists } = await admin.from("clients").select("id").ilike("name", "Yaba Tech Hub Ltd").maybeSingle();
+  if (!manualExists) {
+    must(
+      await admin.from("clients").insert({
+        source: "manual",
+        name: "Yaba Tech Hub Ltd",
+        rc_number: "RC 1580044",
+        industry: "Technology",
+        nature_of_business: "Software development and co-working spaces (added manually, pending sync)",
+        year_end_month: 12,
+        year_end_day: 31,
+      }).select("id").single(),
+      "manual client",
+    );
+  }
   console.log("✓ client");
 
   const { count } = await admin.from("engagements").select("id", { count: "exact", head: true }).eq("client_id", client.id);

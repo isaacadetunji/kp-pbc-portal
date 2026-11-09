@@ -153,7 +153,13 @@ export async function createManualClient(input: z.infer<typeof manualClientSchem
   try {
     await requireClientsAction();
     const v = manualClientSchema.parse(input);
-    const { data, error } = await createAdminClient()
+    const admin = createAdminClient();
+    // No duplicate clients (case-insensitive name) — the synced directory is the
+    // source of truth, so a manual add that collides is rejected with a friendly
+    // message instead of a raw unique-violation.
+    const { data: dupe } = await admin.from("clients").select("id").ilike("name", v.name).maybeSingle();
+    if (dupe) return { ok: false, error: `A client called ${v.name} already exists.` };
+    const { data, error } = await admin
       .from("clients")
       .insert({
         source: "manual",
@@ -170,7 +176,10 @@ export async function createManualClient(input: z.infer<typeof manualClientSchem
       })
       .select("id")
       .single();
-    if (error || !data) return { ok: false, error: friendlyError(error) };
+    if (error || !data) {
+      if (/duplicate|unique/i.test(error?.message ?? "")) return { ok: false, error: `A client called ${v.name} already exists.` };
+      return { ok: false, error: friendlyError(error) };
+    }
     revalidatePath("/admin/clients");
     return { ok: true, data: { id: data.id } };
   } catch (e) {

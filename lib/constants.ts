@@ -1,7 +1,7 @@
 import type { AppRole, EngagementStatus, EventKind, ItemPriority, ItemStatus, SampleLineStatus, TeamRole } from "./types";
 
 /** Badge tones (components/ui/badge.tsx). One meaning per tone across the app. */
-export type BadgeVariant = "default" | "secondary" | "outline" | "success" | "warning" | "danger" | "info" | "review" | "brand" | "muted";
+export type BadgeVariant = "default" | "secondary" | "outline" | "success" | "warning" | "danger" | "info" | "review" | "steel" | "ochre" | "urgent" | "brand" | "muted";
 
 export const ITEM_STATUS: Record<ItemStatus, { label: string; clientLabel: string; variant: BadgeVariant }> = {
   requested: { label: "Requested", clientLabel: "To provide", variant: "muted" },
@@ -25,10 +25,10 @@ export const ITEM_STATUS_ORDER: ItemStatus[] = [
 export const ENGAGEMENT_STATUS: Record<EngagementStatus, { label: string; variant: BadgeVariant; step: number }> = {
   draft: { label: "Draft", variant: "muted", step: 0 },
   awaiting_approval: { label: "Approval", variant: "review", step: 1 },
-  pre_engagement: { label: "Pre-execution", variant: "warning", step: 2 },
-  acceptance_review: { label: "Pre-execution", variant: "warning", step: 2 },
-  accepted: { label: "Pre-execution", variant: "warning", step: 2 },
-  declined: { label: "Pre-execution", variant: "warning", step: 2 },
+  pre_engagement: { label: "Pre-execution", variant: "steel", step: 2 },
+  acceptance_review: { label: "Pre-execution", variant: "steel", step: 2 },
+  accepted: { label: "Pre-execution", variant: "steel", step: 2 },
+  declined: { label: "Pre-execution", variant: "steel", step: 2 },
   in_progress: { label: "Execution", variant: "brand", step: 3 },
   completed: { label: "Completed", variant: "success", step: 4 },
   archived: { label: "Archived", variant: "muted", step: 5 },
@@ -37,8 +37,8 @@ export const ENGAGEMENT_STATUS: Record<EngagementStatus, { label: string; varian
 export const PRIORITY: Record<ItemPriority, { label: string; variant: BadgeVariant }> = {
   low: { label: "Low", variant: "muted" },
   normal: { label: "Normal", variant: "outline" },
-  important: { label: "Important", variant: "warning" },
-  urgent: { label: "Urgent", variant: "danger" },
+  important: { label: "Important", variant: "ochre" },
+  urgent: { label: "Urgent", variant: "urgent" },
 };
 
 export const TEAM_ROLE: Record<TeamRole, string> = {
@@ -48,6 +48,10 @@ export const TEAM_ROLE: Record<TeamRole, string> = {
   member: "Team member",
 };
 export const TEAM_ROLE_ORDER: TeamRole[] = ["partner", "lead", "manager", "member"];
+
+/** Hierarchy rank (mirrors public.team_rank): partner > manager > lead > member.
+ *  Drives lock seniority in the UI; the database is the security boundary. */
+export const TEAM_RANK: Record<TeamRole, number> = { partner: 4, manager: 3, lead: 2, member: 1 };
 
 export const PRIORITY_ORDER: ItemPriority[] = ["low", "normal", "important", "urgent"];
 

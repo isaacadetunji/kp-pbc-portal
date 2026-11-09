@@ -7,6 +7,8 @@ export interface SyncResult {
   fetched: number;
   inserted: number;
   updated: number;
+  /** Manual clients matched by name and merged into synced clients (dedupe). */
+  merged: number;
   contactsUpserted: number;
   deactivated: number;
   errors: string[];
@@ -40,7 +42,7 @@ function toRow(c: DirectoryClient) {
 export async function syncClientsFromDirectory(): Promise<SyncResult> {
   const directory = getClientDirectory();
   const admin = createAdminClient();
-  const result: SyncResult = { mode: directory.mode, fetched: 0, inserted: 0, updated: 0, contactsUpserted: 0, deactivated: 0, errors: [] };
+  const result: SyncResult = { mode: directory.mode, fetched: 0, inserted: 0, updated: 0, merged: 0, contactsUpserted: 0, deactivated: 0, errors: [] };
 
   const clients = await directory.listClients();
   result.fetched = clients.length;
@@ -57,22 +59,43 @@ export async function syncClientsFromDirectory(): Promise<SyncResult> {
     }
   }
 
-  const { data: existing } = await admin.from("clients").select("id, external_id").not("external_id", "is", null);
-  const byExt = new Map((existing ?? []).map((r) => [r.external_id as string, r.id as string]));
+  // Match incoming records to existing clients first by external_id, then by
+  // case-insensitive name. Matching by name lets a MANUAL client be merged in
+  // place (its external_id / source / details are filled from the directory and
+  // the "Manual" flag disappears) instead of creating a duplicate.
+  const { data: existing } = await admin.from("clients").select("id, external_id, name, source");
+  const byExt = new Map<string, string>();
+  const byName = new Map<string, { id: string; source: string }>();
+  (existing ?? []).forEach((r) => {
+    if (r.external_id) byExt.set(r.external_id as string, r.id as string);
+    byName.set((r.name as string).trim().toLowerCase(), { id: r.id as string, source: r.source as string });
+  });
 
   for (const c of clients) {
-    const isNew = !byExt.has(c.externalId);
-    const { data: row, error } = await admin
-      .from("clients")
-      .upsert({ ...toRow(c), ...(c.groupName ? { group_id: groupIds.get(c.groupName.trim().toLowerCase()) ?? null } : {}) }, { onConflict: "external_id" })
-      .select("id")
-      .single();
+    const nameKey = c.name.trim().toLowerCase();
+    const matchById = byExt.get(c.externalId);
+    const matchByName = byName.get(nameKey);
+    const existingId = matchById ?? matchByName?.id;
+    const isNew = !existingId;
+    const mergedManual = !matchById && matchByName?.source === "manual";
+    const groupPatch = c.groupName ? { group_id: groupIds.get(c.groupName.trim().toLowerCase()) ?? null } : {};
+    // Update in place when we matched an existing row (by id or by name);
+    // otherwise insert. A name match on a manual client turns it into a synced
+    // client (external_id set, source='api').
+    const { data: row, error } = existingId
+      ? await admin.from("clients").update({ ...toRow(c), ...groupPatch }).eq("id", existingId).select("id").single()
+      : await admin.from("clients").insert({ ...toRow(c), ...groupPatch }).select("id").single();
     if (error || !row) {
       result.errors.push(`${c.name}: ${error?.message ?? "upsert failed"}`);
       continue;
     }
+    // Keep the in-memory maps current so two incoming rows can't both merge onto
+    // (or re-create) the same client within one sync.
+    byExt.set(c.externalId, row.id as string);
+    byName.set(nameKey, { id: row.id as string, source: "api" });
     if (isNew) result.inserted++;
     else result.updated++;
+    if (mergedManual) result.merged++;
 
     for (const ct of c.contacts) {
       const { error: cErr } = await admin.from("client_contacts").upsert(

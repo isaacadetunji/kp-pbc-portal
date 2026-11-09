@@ -44,6 +44,7 @@ interface DigestRow {
   email: string;
   full_name: string | null;
   local_date: string;
+  reminder_time: string;
   item_count: number;
   items: DigestItem[];
 }
@@ -145,9 +146,9 @@ export async function runDispatch(opts: { now?: Date; provider?: EmailProvider }
         items: r.items ?? [],
         now,
       });
-      const base = { p_engagement_id: r.engagement_id, p_user_id: r.user_id, p_audience: r.audience, p_local_date: r.local_date, p_item_count: r.item_count };
+      const base = { p_engagement_id: r.engagement_id, p_user_id: r.user_id, p_audience: r.audience, p_local_date: r.local_date, p_item_count: r.item_count, p_reminder_time: r.reminder_time };
       try {
-        await provider.send({ to: r.email, ...msg, key: `r-${r.engagement_id}-${r.user_id}-${r.audience}-${r.local_date}` });
+        await provider.send({ to: r.email, ...msg, key: `r-${r.engagement_id}-${r.user_id}-${r.audience}-${r.local_date}-${r.reminder_time}` });
         await db.rpc("record_reminder", { ...base, p_status: "sent", p_error: null });
         summary.reminders.sent++;
       } catch (e) {

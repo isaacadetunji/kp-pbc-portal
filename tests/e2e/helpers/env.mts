@@ -28,6 +28,7 @@ export const demoPassword = process.env.DEMO_PASSWORD ?? "DemoPass#2026";
 export const users = {
   superAdmin: "super@demo.kp.test",
   admin: "admin@demo.kp.test",
+  partner: "partner@demo.kp.test",
   lead: "lead@demo.kp.test",
   manager: "manager@demo.kp.test",
   senior: "senior@demo.kp.test",

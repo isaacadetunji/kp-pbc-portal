@@ -153,8 +153,10 @@ export interface RequestItem {
   /** When the item was created (fallback for the "Requested" date before release). */
   created_at?: string | null;
   updated_at: string;
-  /** Locked: only assignees (plus partners, the lead, managers and the creator) can see it. */
+  /** Locked: only assignees, the locker and anyone ranked strictly above the locker (plus super admin) can see it. */
   is_locked: boolean;
+  /** Who locked the item (drives the seniority override); null when unlocked. */
+  locked_by: string | null;
   /** Who added the item individually (null for items from the master checklist). */
   created_by: string | null;
   /** Permanent / current file (column added by 0009). */
@@ -350,17 +352,21 @@ export interface MasterFolder {
 
 export type ReminderFrequency = "off" | "daily" | "weekdays" | "weekly";
 
-/** Per-engagement notification settings; times are Africa/Lagos, weekdays ISO (1 = Monday). */
+/** Per-engagement notification settings; times are Africa/Lagos, weekdays ISO (1 = Monday).
+ *  Reminders may fire at several times a day (client_reminder_times / team_reminder_times).
+ *  The single *_reminder_time columns are kept for back-compat but no longer drive firing. */
 export interface NotificationSettings {
   client_instant: boolean;
   client_reminder_frequency: ReminderFrequency;
   client_reminder_weekday: number;
   client_reminder_time: string;
+  client_reminder_times: string[];
   client_only_when_outstanding: boolean;
   team_instant: boolean;
   team_reminder_frequency: ReminderFrequency;
   team_reminder_weekday: number;
   team_reminder_time: string;
+  team_reminder_times: string[];
 }
 
 export interface EngagementNotificationSettings extends NotificationSettings {
